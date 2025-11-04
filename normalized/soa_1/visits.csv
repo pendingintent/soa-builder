@@ -1,0 +1,2 @@
+visit_id,raw_header,visit_name,visit_code,sequence_index,window_lower,window_upper,repeat_pattern,category
+1,Cycle 1 Day 1 (C1D1),Cycle 1 Day 1,C1D1,1,,,,baseline

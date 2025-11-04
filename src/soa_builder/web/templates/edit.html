@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Editing SoA {{ soa_id }}</h2>
+<div class="flex">
+  <div>
+    <h3>Visits</h3>
+    <ul>
+      {% for v in visits %}
+      <li>{{ v.order_index }}. {{ v.name }} ({{ v.raw_header }})
+        <form hx-post="/ui/soa/{{ soa_id }}/delete_visit" hx-confirm="Delete visit '{{ v.name }}' and its cells?" style="display:inline">
+          <input type="hidden" name="visit_id" value="{{ v.id }}" />
+          <button type="submit" class="delete-btn">✕</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="/ui/soa/{{ soa_id }}/add_visit">
+      <input name="name" placeholder="Visit Name" required />
+      <input name="raw_header" placeholder="Raw Header (optional)" />
+      <button>Add Visit</button>
+    </form>
+  </div>
+  <div>
+    <h3>Activities</h3>
+    <ul>
+      {% for a in activities %}
+      <li>{{ a.order_index }}. {{ a.name }}
+        <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
+          <input type="hidden" name="activity_id" value="{{ a.id }}" />
+          <button type="submit" class="delete-btn">✕</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="/ui/soa/{{ soa_id }}/add_activity">
+      <input name="name" placeholder="Activity Name" required />
+      <button>Add Activity</button>
+    </form>
+  </div>
+</div>
+<hr />
+<h3>Matrix</h3>
+<table class="matrix">
+  <tr>
+    <th>Activity \ Visit</th>
+    {% for v in visits %}<th>{{ v.name }}</th>{% endfor %}
+  </tr>
+  {% for a in activities %}
+  <tr>
+    <td>{{ a.name }}</td>
+    {% for v in visits %}
+    {% set status = cell_map.get((v.id, a.id), '') %}
+    <td hx-post="/ui/soa/{{ soa_id }}/set_cell" hx-include="closest tr" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }}, "status": "{{ 'X' if status == '' else ('O' if status == 'X' else '') }}"}' class="cell">{{ status }}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+<p><a href="/soa/{{ soa_id }}/normalized" target="_blank">Generate Normalized Summary (JSON)</a></p>
+<style>
+  .delete-btn { background:#c62828; color:#fff; border:none; padding:0 6px; cursor:pointer; }
+  .delete-btn:hover { background:#b71c1c; }
+</style>
+{% endblock %}

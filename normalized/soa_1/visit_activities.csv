@@ -1,0 +1,2 @@
+id,visit_id,activity_id,status,required_flag,conditional_flag
+1,1,1,X,1,0

@@ -11,8 +11,12 @@ src/soa_builder.egg-info/dependency_links.txt
 src/soa_builder.egg-info/entry_points.txt
 src/soa_builder.egg-info/requires.txt
 src/soa_builder.egg-info/top_level.txt
+src/soa_builder/web/app.py
+tests/test_deletion.py
 tests/test_normalization.py
 tests/test_schedule.py
 tests/test_schedule_edge_cases.py
 tests/test_validation.py
 tests/test_validation_intervals.py
+tests/test_web_api.py
+tests/test_web_ui.py

@@ -8,8 +8,13 @@ Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 Requires-Dist: pandas>=2.0.0
 Requires-Dist: click>=8.1.0
+Requires-Dist: fastapi>=0.110.0
+Requires-Dist: uvicorn>=0.23.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: ruff>=0.5.0; extra == "dev"
+Requires-Dist: black>=24.0.0; extra == "dev"
+Requires-Dist: detect-secrets>=1.4.0; extra == "dev"
 
 # SoA Builder (Normalization, Expansion & Validation)
 
@@ -131,6 +136,7 @@ pytest
 - Console script entry point publication via `pyproject.toml`
 - Enriched rule grammar (e.g. conditional frequency changes)
 - SDTM domain mapping utilities
+ - Web application for interactive SoA authoring (initial FastAPI scaffold added)
 
 ## Assumptions & Heuristics
 - All non-first header columns are considered visits.
@@ -143,6 +149,47 @@ pytest
 - Richer recurrence parsing (e.g., bi-weekly then monthly transitions)
 - Endpoint linkage & CRF mapping tables
 - Additional validators (PK sampling alignment, PRO schedule completeness)
+ - Web UI (React or HTMX) atop FastAPI backend for matrix editing
+
+## Web Application (Experimental)
+An initial FastAPI backend (`soa_builder.web.app`) allows creating an SoA interactively via REST:
+
+Endpoints:
+- POST /soa {"name": "Breast Cancer Phase 2"}
+- POST /soa/{id}/visits {"name": "C1D1", "raw_header": "Cycle 1 Day 1 (C1D1)"}
+- POST /soa/{id}/activities {"name": "Hematology"}
+- POST /soa/{id}/cells {"visit_id": 1, "activity_id": 1, "status": "X"}
+- GET  /soa/{id}/matrix  -> JSON matrix
+- GET  /soa/{id}/normalized -> Runs normalization pipeline; returns summary
+ - DELETE /soa/{id}/visits/{visit_id} -> Remove a visit and all its cells; remaining visits reindexed
+ - DELETE /soa/{id}/activities/{activity_id} -> Remove an activity and all its cells; remaining activities reindexed
+
+Run server:
+```bash
+soa-builder-web  # starts uvicorn on 0.0.0.0:8000 with reload
+```
+
+Or manually:
+```bash
+uvicorn soa_builder.web.app:app --reload --port 8000
+```
+
+After populating data, retrieve normalized artifacts:
+```bash
+curl http://localhost:8000/soa/1/normalized
+```
+
+HTML UI:
+- Open http://localhost:8000/ in a browser.
+- Add visits and activities; click cells to toggle status (X -> O -> blank).
+- Use "Generate Normalized Summary" link to produce artifacts.
+ - Delete a visit or activity using the ✕ button next to its name (confirmation dialog). Deletion cascades to associated cells and automatically reorders remaining items.
+
+Notes:
+- HTMX is loaded via CDN; no build step required.
+- For production, configure a persistent DB path via SOA_BUILDER_DB env variable.
+
+Artifacts stored under `normalized/soa_{id}/`.
 
 ## License
 Internal use; extend as needed.

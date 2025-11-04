@@ -1,0 +1,11 @@
+body { font-family: system-ui, Arial, sans-serif; margin: 1.5rem; }
+header h1 { margin: 0; }
+nav a { margin-right: 1rem; }
+.table, table { border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 0.9rem; }
+th { background: #f2f2f2; }
+.flex { display: flex; gap: 2rem; }
+.matrix td.cell { cursor: pointer; min-width: 40px; text-align: center; }
+.matrix td.cell:hover { background: #ffe; }
+form input { margin-right: 0.5rem; }
+button { cursor: pointer; }
