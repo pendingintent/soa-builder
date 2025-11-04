@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soa-builder"
+version = "0.1.0"
+description = "Schedule of Activities normalization, expansion, and validation utilities"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [ { name = "Pending Intent" } ]
+license = { text = "Proprietary" }
+dependencies = [
+  "pandas>=2.0.0",
+  "click>=8.1.0"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
+
+[project.scripts]
+soa-builder = "soa_builder.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
