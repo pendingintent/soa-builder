@@ -1,0 +1,9 @@
+rule_id,pattern,description,source_type,activity_id,visit_id,raw_text
+1,q12w,Visit-level repeating schedule: q12w,header,,13,Survival FU (q12w)
+2,every 12 weeks,Activity-level repeating schedule: every 12 weeks,cell,13,7,Every 12 weeks if cardiotoxic risk
+3,every 2 cycles,Activity-level repeating schedule: every 2 cycles,cell,16,7,Every 2 cycles
+4,every 2 cycles,Activity-level repeating schedule: every 2 cycles,cell,17,5,Every 2 cycles
+5,every 2 cycles,Activity-level repeating schedule: every 2 cycles,cell,17,7,Every 2 cycles
+6,q3w,Activity-level repeating schedule: q3w,cell,23,7,X (q3w)
+7,every 2 cycles,Activity-level repeating schedule: every 2 cycles,cell,26,7,Every 2 cycles
+8,q12w,Activity-level repeating schedule: q12w,cell,31,13,X (q12w)

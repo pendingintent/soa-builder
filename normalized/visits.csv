@@ -1,0 +1,14 @@
+visit_id,raw_header,visit_name,visit_code,sequence_index,window_lower,window_upper,repeat_pattern,category
+1,Screening (-28 to -1d),Screening,-28 to -1d,1,-28,-1,,screening
+2,Baseline / Day 1 (C1D1),Baseline / Day 1,C1D1,2,,,,baseline
+3,Day 8 (C1D8),Day 8,C1D8,3,,,,treatment
+4,Day 15 (C1D15)*,Day 15*,C1D15,4,,,,baseline
+5,Cycle 2 Day 1 (C2D1),Cycle 2 Day 1,C2D1,5,,,every 2 cycles,baseline
+6,Cycle 3 Day 1 (C3D1),Cycle 3 Day 1,C3D1,6,,,,baseline
+7,Each Cycle Day 1 (C4+),Each Cycle Day 1,C4+,7,,,every 12 weeks,baseline
+8,Week 6 (±7d),Week 6,±7d,8,-7,7,,treatment
+9,Week 12 (±7d),Week 12,±7d,9,-7,7,,treatment
+10,Week 18 (±7d),Week 18,±7d,10,-7,7,,treatment
+11,End of Treatment (EOT),End of Treatment,EOT,11,,,,eot
+12,Safety FU (30±7d),Safety FU,30±7d,12,23,37,,follow_up
+13,Survival FU (q12w),Survival FU,q12w,13,,,q12w,follow_up

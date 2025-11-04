@@ -1,0 +1,32 @@
+activity_id,activity_name
+1,Informed consent
+2,Inclusion/Exclusion criteria
+3,Demographics & medical history
+4,Concomitant medications
+5,Randomization
+6,Height
+7,Weight/BMI
+8,Pregnancy test (WOCBP)
+9,Physical exam (targeted)
+10,ECOG performance status
+11,Vital signs (pre/post dose as applicable)
+12,12‑lead ECG
+13,Echocardiogram/MUGA (LVEF)
+14,Hematology (CBC)
+15,Chemistry panel (CMP)
+16,Urinalysis
+17,"Tumor markers (e.g., CA 15‑3)"
+18,Archival tumor tissue collection
+19,Baseline biopsy (optional)
+20,On‑treatment biopsy (optional)
+21,Imaging (CT/MRI per RECIST 1.1)
+22,Brain MRI (if symptomatic or known mets)
+23,Study drug administration
+24,Premedication/infusion reactions
+25,Pharmacokinetics (PK)†
+26,Patient‑reported outcomes (EORTC QLQ‑C30/BR23)
+27,Adverse event assessment
+28,Dose modifications/interruptions
+29,Drug accountability
+30,End of treatment assessments
+31,Survival status
