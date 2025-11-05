@@ -14,7 +14,11 @@ Data persisted in SQLite (file: soa_builder_web.db by default).
 
 from __future__ import annotations
 
-import os, sqlite3, csv, tempfile, json
+import os
+import sqlite3
+import csv
+import tempfile
+import json
 from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
