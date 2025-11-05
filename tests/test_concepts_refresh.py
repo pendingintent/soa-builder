@@ -1,4 +1,5 @@
-import os, json
+import os
+import json
 from importlib import reload
 from fastapi.testclient import TestClient
 import soa_builder.web.app as webapp
