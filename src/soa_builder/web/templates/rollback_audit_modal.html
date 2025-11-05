@@ -1,0 +1,38 @@
+<div class="modal-overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:500;">
+  <div class="modal" style="background:#fff;max-width:760px;width:90%;max-height:80%;overflow:auto;padding:14px 18px;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,0.3);font-size:0.75em;line-height:1.3;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h4 style="margin:0;">Rollback Audit Log</h4>
+      <button onclick="this.closest('.modal-overlay').remove()" style="background:#c62828;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:0.7em;">Close</button>
+    </div>
+    {% if audit %}
+      <table style="width:100%;border-collapse:collapse;font-size:0.7em;">
+        <thead>
+          <tr style="background:#eceff1;">
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">ID</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Freeze ID</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Performed At</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Visits</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Activities</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Cells</th>
+            <th style="text-align:left;padding:4px;border-bottom:1px solid #b0bec5;">Concepts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in audit %}
+            <tr>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.id }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.freeze_id }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;white-space:nowrap;">{{ r.performed_at }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.visits_restored }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.activities_restored }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.cells_restored }}</td>
+              <td style="padding:3px;border-bottom:1px solid #eee;">{{ r.concepts_restored }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div style="font-size:0.65em;color:#777;">No rollback operations recorded yet.</div>
+    {% endif %}
+  </div>
+</div>

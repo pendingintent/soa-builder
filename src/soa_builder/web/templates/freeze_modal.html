@@ -1,0 +1,168 @@
+<div class="modal-overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:500;">
+  <div class="modal" style="background:#fff;max-width:900px;width:90%;max-height:80%;overflow:auto;padding:14px 18px;border-radius:6px;box-shadow:0 4px 18px rgba(0,0,0,0.3);font-size:0.75em;line-height:1.3;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      {% if mode == 'view' %}
+        <h4 style="margin:0;">Freeze {{ freeze.version_label }} <small style="color:#555;">({{ freeze.created_at }})</small></h4>
+      {% elif mode == 'diff' %}
+        <h4 style="margin:0;">Diff {{ diff.left.label }} → {{ diff.right.label }}</h4>
+      {% endif %}
+      <button onclick="this.closest('.modal-overlay').remove()" style="background:#c62828;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:0.7em;">Close</button>
+    </div>
+    {% if mode == 'view' %}
+      {% set snap = freeze.snapshot %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin-bottom:10px;font-size:0.7em;">
+        <div><strong>Visits:</strong> {{ snap.visits|length }}</div>
+        <div><strong>Activities:</strong> {{ snap.activities|length }}</div>
+        <div><strong>Cells:</strong> {{ snap.cells|length }}</div>
+        <div><strong>Concept Mappings:</strong> {{ snap.activity_concepts|length }}</div>
+        <div><strong>Frozen At:</strong> {{ snap.frozen_at }}</div>
+      </div>
+      <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;font-size:0.65em;">
+        <button hx-get="/ui/soa/{{ freeze.snapshot.soa_id }}/freeze/{{ freeze.id }}/rollback_preview" hx-target=".modal-overlay" hx-swap="outerHTML" style="background:#1976d2;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Preview Rollback</button>
+        <form hx-post="/ui/soa/{{ freeze.snapshot.soa_id }}/freeze/{{ freeze.id }}/rollback" hx-target="body" hx-confirm="Rollback current state to version {{ freeze.version_label }}?" style="display:inline;">
+          <button style="background:#6a1b9a;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Rollback</button>
+        </form>
+      </div>
+      <details open>
+        <summary style="cursor:pointer;font-weight:bold;">Visits</summary>
+        <ul style="margin:4px 0 8px 14px;padding:0;">
+          {% for v in snap.visits %}<li>{{ v.order_index }}. {{ v.name }} ({{ v.raw_header }})</li>{% endfor %}
+        </ul>
+      </details>
+      <details>
+        <summary style="cursor:pointer;font-weight:bold;">Activities & Concepts</summary>
+        <ul style="margin:4px 0 8px 14px;padding:0;">
+          {% for a in snap.activities %}
+            <li>{{ a.order_index }}. {{ a.name }}
+              {% set cmap = snap.activity_concepts.get(a.id, []) %}
+              {% if cmap %}
+                <ul style="margin:2px 0 4px 14px;padding:0;">
+                  {% for c in cmap %}<li>{{ c.title }} ({{ c.code }})</li>{% endfor %}
+                </ul>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+      <details>
+        <summary style="cursor:pointer;font-weight:bold;">Cells (non-empty)</summary>
+        <ul style="margin:4px 0 8px 14px;padding:0;">
+          {% for c in snap.cells if c.status %}<li>Visit {{ c.visit_id }} / Activity {{ c.activity_id }} = {{ c.status }}</li>{% endfor %}
+        </ul>
+      </details>
+  {% elif mode == 'diff' %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:6px;margin-bottom:10px;font-size:0.7em;">
+        <div><strong>Visits +</strong> {{ diff.visits.added|length }}/{{ diff.meta.visits.added_total }} • - {{ diff.visits.removed|length }}/{{ diff.meta.visits.removed_total }}</div>
+        <div><strong>Activities +</strong> {{ diff.activities.added|length }}/{{ diff.meta.activities.added_total }} • - {{ diff.activities.removed|length }}/{{ diff.meta.activities.removed_total }}</div>
+        <div><strong>Cells +</strong> {{ diff.cells.added|length }}/{{ diff.meta.cells.added_total }} • - {{ diff.cells.removed|length }}/{{ diff.meta.cells.removed_total }} • Δ {{ diff.cells.changed|length }}/{{ diff.meta.cells.changed_total }}</div>
+        <div><strong>Concept Changes</strong> {{ diff.concepts|length }}/{{ diff.meta.concepts.changes_total }}</div>
+      </div>
+      <div style="margin-bottom:6px;font-size:0.65em;display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="/soa/{{ soa_id }}/export/xlsx?left={{ diff.left.id }}&right={{ diff.right.id }}" style="background:#1976d2;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Download XLSX (with ConceptDiff)</a>
+      </div>
+      {% if diff.meta.limit and (diff.meta.visits.added_truncated or diff.meta.visits.removed_truncated or diff.meta.activities.added_truncated or diff.meta.activities.removed_truncated or diff.meta.cells.added_truncated or diff.meta.cells.removed_truncated or diff.meta.cells.changed_truncated or diff.meta.concepts.changes_truncated) %}
+        <div style="font-size:0.65em;color:#555;margin-bottom:6px;">Showing first {{ diff.meta.limit }} items per list. <button hx-get="/ui/soa/{{ soa_id }}/freeze/diff?left={{ diff.left.id }}&right={{ diff.right.id }}&full=1" hx-target=".modal-overlay" hx-swap="outerHTML" style="background:#1976d2;color:#fff;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;">Show All</button></div>
+      {% endif %}
+      <details open>
+        <summary style="cursor:pointer;font-weight:bold;">Visits Added/Removed</summary>
+        <div style="display:flex;gap:30px;flex-wrap:wrap;">
+          <div><strong>Added</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for v in diff.visits.added %}<li>{{ v.order_index }}. {{ v.name }}</li>{% endfor %}
+              {% if diff.visits.added|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+          <div><strong>Removed</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for v in diff.visits.removed %}<li>{{ v.order_index }}. {{ v.name }}</li>{% endfor %}
+              {% if diff.visits.removed|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+        </div>
+      </details>
+      <details>
+        <summary style="cursor:pointer;font-weight:bold;">Activities Added/Removed</summary>
+        <div style="display:flex;gap:30px;flex-wrap:wrap;">
+          <div><strong>Added</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for a in diff.activities.added %}<li>{{ a.order_index }}. {{ a.name }}</li>{% endfor %}
+              {% if diff.activities.added|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+          <div><strong>Removed</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for a in diff.activities.removed %}<li>{{ a.order_index }}. {{ a.name }}</li>{% endfor %}
+              {% if diff.activities.removed|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+        </div>
+      </details>
+      <details>
+        <summary style="cursor:pointer;font-weight:bold;">Cells Added/Removed/Changed</summary>
+        <div style="display:flex;gap:26px;flex-wrap:wrap;">
+          <div><strong>Added</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for c in diff.cells.added %}<li>V{{ c.visit_id }} / A{{ c.activity_id }} = {{ c.status }}</li>{% endfor %}
+              {% if diff.cells.added|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+          <div><strong>Removed</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for c in diff.cells.removed %}<li>V{{ c.visit_id }} / A{{ c.activity_id }} = {{ c.status }}</li>{% endfor %}
+              {% if diff.cells.removed|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+          <div><strong>Changed</strong>
+            <ul style="margin:4px 0 8px 14px;padding:0;">
+              {% for c in diff.cells.changed %}<li>V{{ c.visit_id }} / A{{ c.activity_id }}: {{ c.old_status }} → {{ c.new_status }}</li>{% endfor %}
+              {% if diff.cells.changed|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+            </ul>
+          </div>
+        </div>
+      </details>
+      <details>
+        <summary style="cursor:pointer;font-weight:bold;">Concept Changes</summary>
+        <ul style="margin:4px 0 8px 14px;padding:0;">
+          {% for ch in diff.concepts %}
+            <li>Activity {{ ch.activity_id }}
+              <ul style="margin:2px 0 4px 14px;padding:0;">
+                <li><strong>Added:</strong> {% if ch.added %}{{ ch.added|join(', ') }}{% else %}<span style="color:#777;">None</span>{% endif %}</li>
+                <li><strong>Removed:</strong> {% if ch.removed %}{{ ch.removed|join(', ') }}{% else %}<span style="color:#777;">None</span>{% endif %}</li>
+                <li><strong>Title Changes:</strong>
+                  {% if ch.title_changes %}
+                    <ul style="margin:2px 0 4px 14px;padding:0;">
+                      {% for tc in ch.title_changes %}<li>{{ tc.code }}: "{{ tc.old_title }}" → "{{ tc.new_title }}"</li>{% endfor %}
+                    </ul>
+                  {% else %}<span style="color:#777;">None</span>{% endif %}
+                </li>
+              </ul>
+            </li>
+          {% endfor %}
+          {% if diff.concepts|length == 0 %}<li style="color:#777;">None</li>{% endif %}
+        </ul>
+      </details>
+      <div style="margin-top:10px;font-size:0.65em;display:flex;gap:8px;flex-wrap:wrap;">
+        <form hx-post="/ui/soa/{{ soa_id }}/freeze/{{ diff.left.id }}/rollback" hx-target="body" hx-confirm="Rollback current state to version {{ diff.left.label }}? This replaces visits, activities, cells & concepts." style="display:inline;">
+          <button style="background:#6a1b9a;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">Rollback to {{ diff.left.label }}</button>
+        </form>
+        <form hx-post="/ui/soa/{{ soa_id }}/freeze/{{ diff.right.id }}/rollback" hx-target="body" hx-confirm="Rollback current state to version {{ diff.right.label }}?" style="display:inline;">
+          <button style="background:#6a1b9a;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">Rollback to {{ diff.right.label }}</button>
+        </form>
+      </div>
+    {% elif mode == 'rollback_preview' %}
+      <h5 style="margin:0 0 6px 0;font-size:0.8em;">Rollback Preview for {{ freeze.version_label }}</h5>
+      <ul style="margin:4px 0 10px 16px;padding:0;font-size:0.7em;">
+        <li>Visits to restore: {{ preview.visits_to_restore }}</li>
+        <li>Activities to restore: {{ preview.activities_to_restore }}</li>
+        <li>Cells to restore: {{ preview.cells_to_restore }}</li>
+        <li>Concept mappings to restore: {{ preview.concept_mappings_to_restore }}</li>
+      </ul>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:0.65em;">
+        <form hx-post="/ui/soa/{{ freeze.snapshot.soa_id }}/freeze/{{ freeze.id }}/rollback" hx-target="body" hx-confirm="Confirm rollback to version {{ freeze.version_label }}? This replaces current matrix." style="display:inline;">
+          <button style="background:#6a1b9a;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;">Confirm Rollback</button>
+        </form>
+        <button onclick="this.closest('.modal-overlay').remove()" style="background:#455a64;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;">Cancel</button>
+      </div>
+    {% endif %}
+  </div>
+</div>

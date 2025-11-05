@@ -84,6 +84,27 @@ def _init_db():
     cur.execute(
         """CREATE TABLE IF NOT EXISTS activity_concept (id INTEGER PRIMARY KEY AUTOINCREMENT, activity_id INTEGER, concept_code TEXT, concept_title TEXT)"""
     )
+    # Frozen versions (snapshot JSON of current matrix & concepts)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS soa_freeze (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, version_label TEXT, created_at TEXT, snapshot_json TEXT)"""
+    )
+    # Unique index to enforce one label per SoA
+    cur.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_soafreeze_unique ON soa_freeze(soa_id, version_label)"""
+    )
+    # Rollback audit log
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS rollback_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            freeze_id INTEGER NOT NULL,
+            performed_at TEXT NOT NULL,
+            visits_restored INTEGER,
+            activities_restored INTEGER,
+            cells_restored INTEGER,
+            concepts_restored INTEGER
+        )"""
+    )
     conn.commit()
     conn.close()
 
@@ -137,6 +158,416 @@ class ActivityCreate(BaseModel):
 
 class ConceptsUpdate(BaseModel):
     concept_codes: List[str]
+
+
+class FreezeCreate(BaseModel):
+    version_label: Optional[str] = None
+
+
+def _list_freezes(soa_id: int):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, version_label, created_at FROM soa_freeze WHERE soa_id=? ORDER BY id DESC",
+        (soa_id,),
+    )
+    rows = [dict(id=r[0], version_label=r[1], created_at=r[2]) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def _get_freeze(soa_id: int, freeze_id: int):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, version_label, created_at, snapshot_json FROM soa_freeze WHERE id=? AND soa_id=?",
+        (freeze_id, soa_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        snap = json.loads(row[3])
+    except Exception:
+        snap = {"error": "Corrupt snapshot"}
+    return {
+        "id": row[0],
+        "version_label": row[1],
+        "created_at": row[2],
+        "snapshot": snap,
+    }
+
+
+def _create_freeze(soa_id: int, version_label: Optional[str]):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    # Auto version label if not provided
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT version_label FROM soa_freeze WHERE soa_id=?", (soa_id,))
+    existing_labels = {r[0] for r in cur.fetchall()}
+    if not version_label or not version_label.strip():
+        # Find next available vN
+        n = 1
+        while f"v{n}" in existing_labels:
+            n += 1
+        version_label = f"v{n}"
+    else:
+        version_label = version_label.strip()
+    if version_label in existing_labels:
+        raise HTTPException(400, "Version label already exists for this SOA")
+    # Gather snapshot data
+    cur.execute("SELECT name, created_at FROM soa WHERE id=?", (soa_id,))
+    row = cur.fetchone()
+    soa_name = row[0] if row else f"SOA {soa_id}"
+    visits, activities, cells = _fetch_matrix(soa_id)
+    # Concept mapping
+    activity_ids = [a["id"] for a in activities]
+    concepts_map = {}
+    if activity_ids:
+        placeholders = ",".join("?" for _ in activity_ids)
+        cur.execute(
+            f"SELECT activity_id, concept_code, concept_title FROM activity_concept WHERE activity_id IN ({placeholders})",
+            activity_ids,
+        )
+        for aid, code, title in cur.fetchall():
+            concepts_map.setdefault(aid, []).append({"code": code, "title": title})
+    snapshot = {
+        "soa_id": soa_id,
+        "soa_name": soa_name,
+        "version_label": version_label,
+        "frozen_at": datetime.now(timezone.utc).isoformat(),
+        "visits": visits,
+        "activities": activities,
+        "cells": cells,
+        "activity_concepts": concepts_map,
+    }
+    snap_json = json.dumps(snapshot)
+    cur.execute(
+        "INSERT INTO soa_freeze (soa_id, version_label, created_at, snapshot_json) VALUES (?,?,?,?)",
+        (soa_id, version_label, datetime.now(timezone.utc).isoformat(), snap_json),
+    )
+    fid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return fid, version_label
+
+
+def _diff_freezes(soa_id: int, left_id: int, right_id: int):
+    return _diff_freezes_limited(soa_id, left_id, right_id, limit=None)
+
+
+def _diff_freezes_limited(
+    soa_id: int, left_id: int, right_id: int, limit: Optional[int]
+):
+    left = _get_freeze(soa_id, left_id)
+    right = _get_freeze(soa_id, right_id)
+    if not left or not right:
+        raise HTTPException(404, "Freeze not found")
+    l_snap = left["snapshot"]
+    r_snap = right["snapshot"]
+    # Visits
+    l_vis = {
+        str(v["id"]): v
+        for v in l_snap.get("visits", [])
+        if isinstance(v, dict) and "id" in v
+    }
+    r_vis = {
+        str(v["id"]): v
+        for v in r_snap.get("visits", [])
+        if isinstance(v, dict) and "id" in v
+    }
+    visits_added_all = [r_vis[k] for k in r_vis.keys() - l_vis.keys()]
+    visits_removed_all = [l_vis[k] for k in l_vis.keys() - r_vis.keys()]
+    # Activities
+    l_act = {
+        str(a["id"]): a
+        for a in l_snap.get("activities", [])
+        if isinstance(a, dict) and "id" in a
+    }
+    r_act = {
+        str(a["id"]): a
+        for a in r_snap.get("activities", [])
+        if isinstance(a, dict) and "id" in a
+    }
+    acts_added_all = [r_act[k] for k in r_act.keys() - l_act.keys()]
+    acts_removed_all = [l_act[k] for k in l_act.keys() - r_act.keys()]
+    # Cells (status changes)
+    l_cells = {
+        (c["visit_id"], c["activity_id"]): c
+        for c in l_snap.get("cells", [])
+        if isinstance(c, dict)
+    }
+    r_cells = {
+        (c["visit_id"], c["activity_id"]): c
+        for c in r_snap.get("cells", [])
+        if isinstance(c, dict)
+    }
+    cells_added_all = [r_cells[k] for k in r_cells.keys() - l_cells.keys()]
+    cells_removed_all = [l_cells[k] for k in l_cells.keys() - r_cells.keys()]
+    cells_changed_all = []
+    for k in r_cells.keys() & l_cells.keys():
+        if r_cells[k].get("status") != l_cells[k].get("status"):
+            cells_changed_all.append(
+                {
+                    "visit_id": k[0],
+                    "activity_id": k[1],
+                    "old_status": l_cells[k].get("status"),
+                    "new_status": r_cells[k].get("status"),
+                }
+            )
+    # Concepts per activity with title change detection
+    l_concepts_map = l_snap.get("activity_concepts", {}) or {}
+    r_concepts_map = r_snap.get("activity_concepts", {}) or {}
+    concept_changes_all = []
+    all_aids = set(map(str, l_concepts_map.keys())) | set(
+        map(str, r_concepts_map.keys())
+    )
+
+    def _get_concept_list(m, key):
+        # Support snapshots where JSON serialization converted int keys to strings
+        if key in m:
+            return m[key] or []
+        if key.isdigit() and int(key) in m:
+            return m[int(key)] or []
+        return []
+
+    for aid in all_aids:
+        la = _get_concept_list(l_concepts_map, aid)
+        ra = _get_concept_list(r_concepts_map, aid)
+        l_set = {c["code"] for c in la if isinstance(c, dict)}
+        r_set = {c["code"] for c in ra if isinstance(c, dict)}
+        added = sorted(list(r_set - l_set))
+        removed = sorted(list(l_set - r_set))
+        title_changes = []
+        for code in sorted(list(l_set & r_set)):
+            l_title = next((c["title"] for c in la if c.get("code") == code), None)
+            r_title = next((c["title"] for c in ra if c.get("code") == code), None)
+            if l_title is not None and r_title is not None and l_title != r_title:
+                title_changes.append(
+                    {"code": code, "old_title": l_title, "new_title": r_title}
+                )
+        if added or removed or title_changes:
+            concept_changes_all.append(
+                {
+                    "activity_id": aid,
+                    "added": added,
+                    "removed": removed,
+                    "title_changes": title_changes,
+                }
+            )
+
+    # Apply limit truncation if provided and >0
+    def _truncate(lst):
+        if limit and limit > 0 and len(lst) > limit:
+            return lst[:limit], True
+        return lst, False
+
+    visits_added, visits_added_trunc = _truncate(visits_added_all)
+    visits_removed, visits_removed_trunc = _truncate(visits_removed_all)
+    acts_added, acts_added_trunc = _truncate(acts_added_all)
+    acts_removed, acts_removed_trunc = _truncate(acts_removed_all)
+    cells_added, cells_added_trunc = _truncate(cells_added_all)
+    cells_removed, cells_removed_trunc = _truncate(cells_removed_all)
+    cells_changed, cells_changed_trunc = _truncate(cells_changed_all)
+    concept_changes, concept_changes_trunc = _truncate(concept_changes_all)
+    meta = {
+        "limit": limit,
+        "visits": {
+            "added_total": len(visits_added_all),
+            "removed_total": len(visits_removed_all),
+            "added_truncated": visits_added_trunc,
+            "removed_truncated": visits_removed_trunc,
+        },
+        "activities": {
+            "added_total": len(acts_added_all),
+            "removed_total": len(acts_removed_all),
+            "added_truncated": acts_added_trunc,
+            "removed_truncated": acts_removed_trunc,
+        },
+        "cells": {
+            "added_total": len(cells_added_all),
+            "removed_total": len(cells_removed_all),
+            "changed_total": len(cells_changed_all),
+            "added_truncated": cells_added_trunc,
+            "removed_truncated": cells_removed_trunc,
+            "changed_truncated": cells_changed_trunc,
+        },
+        "concepts": {
+            "changes_total": len(concept_changes_all),
+            "changes_truncated": concept_changes_trunc,
+        },
+    }
+    return {
+        "left": {
+            "id": left["id"],
+            "label": left["version_label"],
+            "created_at": left["created_at"],
+        },
+        "right": {
+            "id": right["id"],
+            "label": right["version_label"],
+            "created_at": right["created_at"],
+        },
+        "visits": {"added": visits_added, "removed": visits_removed},
+        "activities": {"added": acts_added, "removed": acts_removed},
+        "cells": {
+            "added": cells_added,
+            "removed": cells_removed,
+            "changed": cells_changed,
+        },
+        "concepts": concept_changes,
+        "meta": meta,
+    }
+
+
+def _rollback_freeze(soa_id: int, freeze_id: int) -> dict:
+    freeze = _get_freeze(soa_id, freeze_id)
+    if not freeze:
+        raise HTTPException(404, "Freeze not found")
+    snap = freeze["snapshot"]
+    if snap.get("soa_id") != soa_id:
+        raise HTTPException(400, "Snapshot SoA mismatch")
+    visits = snap.get("visits", [])
+    activities = snap.get("activities", [])
+    cells = snap.get("cells", [])
+    concepts_map = snap.get("activity_concepts", {}) or {}
+    conn = _connect()
+    cur = conn.cursor()
+    # Clear existing
+    cur.execute("DELETE FROM cell WHERE soa_id=?", (soa_id,))
+    cur.execute("DELETE FROM activity WHERE soa_id=?", (soa_id,))
+    cur.execute("DELETE FROM visit WHERE soa_id=?", (soa_id,))
+    cur.execute(
+        "DELETE FROM activity_concept WHERE activity_id IN (SELECT id FROM activity WHERE soa_id=? )",
+        (soa_id,),
+    )
+    # Reinsert visits mapping old id->new id
+    visit_id_map = {}
+    for v in sorted(visits, key=lambda x: x.get("order_index", 0)):
+        cur.execute(
+            "INSERT INTO visit (soa_id,name,raw_header,order_index) VALUES (?,?,?,?)",
+            (
+                soa_id,
+                v.get("name"),
+                v.get("raw_header") or v.get("name"),
+                v.get("order_index"),
+            ),
+        )
+        new_id = cur.lastrowid
+        visit_id_map[v.get("id")] = new_id
+    # Reinsert activities mapping old id->new id
+    activity_id_map = {}
+    for a in sorted(activities, key=lambda x: x.get("order_index", 0)):
+        cur.execute(
+            "INSERT INTO activity (soa_id,name,order_index) VALUES (?,?,?)",
+            (soa_id, a.get("name"), a.get("order_index")),
+        )
+        new_id = cur.lastrowid
+        activity_id_map[a.get("id")] = new_id
+    # Reinsert cells
+    inserted_cells = 0
+    for c in cells:
+        old_vid = c.get("visit_id")
+        old_aid = c.get("activity_id")
+        status = c.get("status", "").strip()
+        if status == "":
+            continue
+        vid = visit_id_map.get(old_vid)
+        aid = activity_id_map.get(old_aid)
+        if vid and aid:
+            cur.execute(
+                "INSERT INTO cell (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
+                (soa_id, vid, aid, status),
+            )
+            inserted_cells += 1
+    # Reinsert concepts
+    inserted_concepts = 0
+    for old_aid, concept_list in concepts_map.items():
+        new_aid = activity_id_map.get(old_aid)
+        if not new_aid:
+            continue
+        for c in concept_list:
+            code = c.get("code")
+            title = c.get("title") or code
+            if not code:
+                continue
+            cur.execute(
+                "INSERT INTO activity_concept (activity_id, concept_code, concept_title) VALUES (?,?,?)",
+                (new_aid, code, title),
+            )
+            inserted_concepts += 1
+    conn.commit()
+    conn.close()
+    return {
+        "rollback_freeze_id": freeze_id,
+        "visits_restored": len(visits),
+        "activities_restored": len(activities),
+        "cells_restored": inserted_cells,
+        "concept_mappings_restored": inserted_concepts,
+    }
+
+
+def _record_rollback_audit(soa_id: int, freeze_id: int, stats: dict):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO rollback_audit (soa_id, freeze_id, performed_at, visits_restored, activities_restored, cells_restored, concepts_restored) VALUES (?,?,?,?,?,?,?)",
+        (
+            soa_id,
+            freeze_id,
+            datetime.now(timezone.utc).isoformat(),
+            stats.get("visits_restored"),
+            stats.get("activities_restored"),
+            stats.get("cells_restored"),
+            stats.get("concept_mappings_restored"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _list_rollback_audit(soa_id: int) -> list[dict]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, freeze_id, performed_at, visits_restored, activities_restored, cells_restored, concepts_restored FROM rollback_audit WHERE soa_id=? ORDER BY id DESC",
+        (soa_id,),
+    )
+    rows = [
+        {
+            "id": r[0],
+            "freeze_id": r[1],
+            "performed_at": r[2],
+            "visits_restored": r[3],
+            "activities_restored": r[4],
+            "cells_restored": r[5],
+            "concepts_restored": r[6],
+        }
+        for r in cur.fetchall()
+    ]
+    conn.close()
+    return rows
+
+
+def _rollback_preview(soa_id: int, freeze_id: int) -> dict:
+    freeze = _get_freeze(soa_id, freeze_id)
+    if not freeze:
+        raise HTTPException(404, "Freeze not found")
+    snap = freeze["snapshot"]
+    visits = snap.get("visits", [])
+    activities = snap.get("activities", [])
+    cells = [c for c in snap.get("cells", []) if c.get("status", "").strip() != ""]
+    concepts_map = snap.get("activity_concepts", {}) or {}
+    return {
+        "freeze_id": freeze_id,
+        "version_label": freeze.get("version_label"),
+        "visits_to_restore": len(visits),
+        "activities_to_restore": len(activities),
+        "cells_to_restore": len(cells),
+        "concept_mappings_to_restore": sum(len(v) for v in concepts_map.values()),
+    }
 
 
 class CellCreate(BaseModel):
@@ -368,6 +799,160 @@ def ui_refresh_concepts(request: Request, soa_id: int):
         return HTMLResponse("", headers={"HX-Redirect": f"/ui/soa/{soa_id}/edit"})
     # Fallback: plain form POST non-htmx redirect via script
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/freeze", response_class=HTMLResponse)
+def ui_freeze_soa(request: Request, soa_id: int, version_label: str = Form("")):
+    try:
+        _fid, _vlabel = _create_freeze(soa_id, version_label or None)
+    except HTTPException as he:
+        # Return inline error block for HTMX; simple alert fallback for non-HTMX
+        if request.headers.get("HX-Request") == "true":
+            return HTMLResponse(
+                f"<div class='error' style='color:#c62828;font-size:0.7em;'>Error: {he.detail}</div>"
+            )
+        return HTMLResponse(
+            f"<script>alert('Error: {he.detail}');window.location='/ui/soa/{soa_id}/edit';</script>"
+        )
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse("", headers={"HX-Redirect": f"/ui/soa/{soa_id}/edit"})
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.get("/soa/{soa_id}/freeze/{freeze_id}")
+def get_freeze(soa_id: int, freeze_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT snapshot_json FROM soa_freeze WHERE id=? AND soa_id=?",
+        (freeze_id, soa_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Freeze not found")
+    try:
+        data = json.loads(row[0])
+    except Exception:
+        data = {"error": "Corrupt snapshot"}
+    return JSONResponse(data)
+
+
+@app.get("/ui/soa/{soa_id}/freeze/{freeze_id}/view", response_class=HTMLResponse)
+def ui_freeze_view(request: Request, soa_id: int, freeze_id: int):
+    freeze = _get_freeze(soa_id, freeze_id)
+    if not freeze:
+        raise HTTPException(404, "Freeze not found")
+    return templates.TemplateResponse(
+        "freeze_modal.html",
+        {"request": request, "mode": "view", "freeze": freeze, "soa_id": soa_id},
+    )
+
+
+@app.get("/ui/soa/{soa_id}/freeze/diff", response_class=HTMLResponse)
+def ui_freeze_diff(request: Request, soa_id: int, left: int, right: int, full: int = 0):
+    limit = None if full == 1 else 50
+    diff = _diff_freezes_limited(soa_id, left, right, limit=limit)
+    return templates.TemplateResponse(
+        "freeze_modal.html",
+        {"request": request, "mode": "diff", "diff": diff, "soa_id": soa_id},
+    )
+
+
+@app.post("/ui/soa/{soa_id}/freeze/{freeze_id}/rollback", response_class=HTMLResponse)
+def ui_freeze_rollback(request: Request, soa_id: int, freeze_id: int):
+    result = _rollback_freeze(soa_id, freeze_id)
+    _record_rollback_audit(
+        soa_id,
+        freeze_id,
+        {
+            "visits_restored": result["visits_restored"],
+            "activities_restored": result["activities_restored"],
+            "cells_restored": result["cells_restored"],
+            "concept_mappings_restored": result["concept_mappings_restored"],
+        },
+    )
+    # HTMX redirect back to edit with status message injected if desired later
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse("", headers={"HX-Redirect": f"/ui/soa/{soa_id}/edit"})
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.get(
+    "/ui/soa/{soa_id}/freeze/{freeze_id}/rollback_preview", response_class=HTMLResponse
+)
+def ui_freeze_rollback_preview(request: Request, soa_id: int, freeze_id: int):
+    preview = _rollback_preview(soa_id, freeze_id)
+    freeze = _get_freeze(soa_id, freeze_id)
+    return templates.TemplateResponse(
+        "freeze_modal.html",
+        {
+            "request": request,
+            "mode": "rollback_preview",
+            "preview": preview,
+            "freeze": freeze,
+            "soa_id": soa_id,
+        },
+    )
+
+
+@app.get("/soa/{soa_id}/freeze/diff.json")
+def get_freeze_diff_json(soa_id: int, left: int, right: int, full: int = 0):
+    limit = None if full == 1 else 1000  # large default for JSON
+    diff = _diff_freezes_limited(soa_id, left, right, limit=limit)
+    return JSONResponse(diff)
+
+
+@app.get("/soa/{soa_id}/rollback_audit")
+def get_rollback_audit_json(soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return {"audit": _list_rollback_audit(soa_id)}
+
+
+@app.get("/ui/soa/{soa_id}/rollback_audit", response_class=HTMLResponse)
+def ui_rollback_audit(request: Request, soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return templates.TemplateResponse(
+        "rollback_audit_modal.html",
+        {"request": request, "soa_id": soa_id, "audit": _list_rollback_audit(soa_id)},
+    )
+
+
+@app.get("/soa/{soa_id}/rollback_audit/export/xlsx")
+def export_rollback_audit_xlsx(soa_id: int):
+    """Export rollback audit history for the SoA to an Excel workbook."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    rows = _list_rollback_audit(soa_id)
+    # Prepare DataFrame
+    df = pd.DataFrame(rows)
+    if df.empty:
+        # Create empty frame with columns for consistency
+        df = pd.DataFrame(
+            columns=[
+                "id",
+                "freeze_id",
+                "performed_at",
+                "visits_restored",
+                "activities_restored",
+                "cells_restored",
+                "concepts_restored",
+            ]
+        )
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="RollbackAudit")
+    bio.seek(0)
+    filename = f"soa_{soa_id}_rollback_audit.xlsx"
+    return StreamingResponse(
+        bio,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/concepts/status")
@@ -706,7 +1291,7 @@ def get_matrix(soa_id: int):
 
 
 @app.get("/soa/{soa_id}/export/xlsx")
-def export_xlsx(soa_id: int):
+def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = None):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
     visits, activities, cells = _fetch_matrix(soa_id)
@@ -751,10 +1336,82 @@ def export_xlsx(soa_id: int):
         mapping_rows,
         columns=["ActivityID", "ActivityName", "ConceptCode", "ConceptTitle"],
     )
+    # Build rollback audit sheet data (optional)
+    audit_rows = (
+        _list_rollback_audit(soa_id) if "_list_rollback_audit" in globals() else []
+    )
+    audit_df = pd.DataFrame(audit_rows)
+    if audit_df.empty:
+        audit_df = pd.DataFrame(
+            columns=[
+                "id",
+                "freeze_id",
+                "performed_at",
+                "visits_restored",
+                "activities_restored",
+                "cells_restored",
+                "concepts_restored",
+            ]
+        )
     bio = io.BytesIO()
+    # Optional concept diff sheet if left/right provided
+    concept_diff_df = None
+    if left and right:
+        try:
+            diff = _diff_freezes_limited(soa_id, left, right, limit=None)
+            left_freeze = _get_freeze(soa_id, left)
+            right_freeze = _get_freeze(soa_id, right)
+            activity_name_lookup = {}
+            if left_freeze:
+                for a in left_freeze.get("snapshot", {}).get("activities", []):
+                    if isinstance(a, dict):
+                        activity_name_lookup[str(a.get("id"))] = a.get("name")
+            if right_freeze:
+                for a in right_freeze.get("snapshot", {}).get("activities", []):
+                    if isinstance(a, dict):
+                        activity_name_lookup[str(a.get("id"))] = a.get("name")
+            diff_rows = []
+            for ch in diff.get("concepts", []):
+                aid = str(ch.get("activity_id"))
+                aname = activity_name_lookup.get(aid, "")
+                added = ", ".join(ch.get("added", []))
+                removed = ", ".join(ch.get("removed", []))
+                title_changes = "; ".join(
+                    [
+                        f"{tc['code']}: '{tc['old_title']}' -> '{tc['new_title']}'"
+                        for tc in ch.get("title_changes", [])
+                    ]
+                )
+                diff_rows.append([aid, aname, added, removed, title_changes])
+            concept_diff_df = pd.DataFrame(
+                diff_rows,
+                columns=[
+                    "ActivityID",
+                    "ActivityName",
+                    "AddedConceptCodes",
+                    "RemovedConceptCodes",
+                    "TitleChanges",
+                ],
+            )
+            if concept_diff_df.empty:
+                concept_diff_df = pd.DataFrame(
+                    columns=[
+                        "ActivityID",
+                        "ActivityName",
+                        "AddedConceptCodes",
+                        "RemovedConceptCodes",
+                        "TitleChanges",
+                    ]
+                )
+        except Exception as e:
+            # Provide an error sheet to highlight issue rather than failing entire export
+            concept_diff_df = pd.DataFrame([[str(e)]], columns=["ConceptDiffError"])
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="SoA")
         mapping_df.to_excel(writer, index=False, sheet_name="ConceptMappings")
+        audit_df.to_excel(writer, index=False, sheet_name="RollbackAudit")
+        if concept_diff_df is not None:
+            concept_diff_df.to_excel(writer, index=False, sheet_name="ConceptDiff")
     bio.seek(0)
     filename = f"soa_{soa_id}_matrix.xlsx"
     return StreamingResponse(
@@ -982,6 +1639,8 @@ def ui_edit(request: Request, soa_id: int):
             last_fetch_relative = f"{secs//60}m ago"
         else:
             last_fetch_relative = f"{secs//3600}h ago"
+    freeze_list = _list_freezes(soa_id)
+    last_frozen_at = freeze_list[0]["created_at"] if freeze_list else None
     return templates.TemplateResponse(
         "edit.html",
         {
@@ -996,6 +1655,9 @@ def ui_edit(request: Request, soa_id: int):
             "concepts_diag": concepts_diag,
             "concepts_last_fetch_iso": last_fetch_iso,
             "concepts_last_fetch_relative": last_fetch_relative,
+            "freezes": freeze_list,
+            "freeze_count": len(freeze_list),
+            "last_frozen_at": last_frozen_at,
         },
     )
 
