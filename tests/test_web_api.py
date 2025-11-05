@@ -1,4 +1,6 @@
-import os, json, tempfile
+import os
+import json
+import tempfile
 import sqlite3
 from fastapi.testclient import TestClient
 from soa_builder.web.app import app, DB_PATH
