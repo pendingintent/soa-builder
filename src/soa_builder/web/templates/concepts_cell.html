@@ -1,0 +1,63 @@
+{# Partial for concepts cell in matrix (add/remove only; concepts immutable) #}
+<td class="concepts-cell" id="concepts-cell-{{ activity_id }}" style="vertical-align:top;">
+  {% if edit %}
+    <form hx-post="/ui/soa/{{ soa_id }}/activity/{{ activity_id }}/concepts" hx-target="#concepts-cell-{{ activity_id }}" hx-swap="outerHTML" style="margin:0;">
+      <div style="margin-bottom:4px;">
+        <input type="text" class="concept-search-inline" placeholder="Filter concepts..." style="width:200px;padding:2px 4px;font-size:0.6em;" />
+      </div>
+      <select name="concept_codes" multiple size="6" class="concept-select-inline" style="min-width:200px;font-size:0.65em;">
+        {% for c in concepts %}
+          <option value="{{ c.code }}" {% if c.code in selected_codes %}selected{% endif %}>{{ c.title }}</option>
+        {% endfor %}
+      </select>
+      <div style="margin-top:4px;display:flex;gap:6px;">
+        <button type="submit" class="small-btn" style="font-size:0.6em;">Save</button>
+        <button type="button" class="refresh-btn" hx-get="/ui/soa/{{ soa_id }}/activity/{{ activity_id }}/concepts_cell" hx-target="#concepts-cell-{{ activity_id }}" hx-swap="outerHTML" style="font-size:0.6em;">Cancel</button>
+      </div>
+    </form>
+    <script>
+      (function(){
+        const root = document.getElementById('concepts-cell-{{ activity_id }}');
+        if(!root) return;
+        const search = root.querySelector('.concept-search-inline');
+        const select = root.querySelector('.concept-select-inline');
+        if(!search || !select) return;
+        search.addEventListener('input', () => {
+          const q = search.value.trim().toLowerCase();
+          Array.from(select.options).forEach(opt => {
+            const t = opt.textContent.toLowerCase();
+            opt.hidden = q && !t.includes(q);
+          });
+        });
+      })();
+    </script>
+  {% else %}
+    <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:4px;max-width:320px;">
+      {% if selected_list %}
+        {% for ac in selected_list %}
+          <span class="tag" style="background:#eef;color:#224;margin:2px;display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border-radius:3px;font-size:0.6em;">
+            <span class="tag-title" title="{{ ac.code }}">{{ ac.title }}</span>
+            <form hx-post="/ui/soa/{{ soa_id }}/activity/{{ activity_id }}/concepts/remove" hx-target="#concepts-cell-{{ activity_id }}" hx-swap="outerHTML" style="display:inline;">
+              <input type="hidden" name="concept_code" value="{{ ac.code }}" />
+              <button type="submit" style="border:none;background:transparent;color:#900;font-weight:bold;cursor:pointer;padding:0 2px;" title="Remove">×</button>
+            </form>
+          </span>
+        {% endfor %}
+      {% else %}
+        <span class="no-concepts" style="color:#888;font-size:0.6em;">–</span>
+      {% endif %}
+      <form hx-post="/ui/soa/{{ soa_id }}/activity/{{ activity_id }}/concepts/add" hx-target="#concepts-cell-{{ activity_id }}" hx-swap="outerHTML" style="display:flex;align-items:center;gap:4px;margin:2px;">
+        <select name="concept_code" style="font-size:0.6em;max-width:160px;">
+          <option value="" disabled selected>Add concept...</option>
+          {% for c in concepts %}
+            {% if c.code not in selected_codes %}
+              <option value="{{ c.code }}">{{ c.title }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <button type="submit" style="font-size:0.55em;">+</button>
+      </form>
+  <button type="button" class="edit-concepts-btn" hx-get="/ui/soa/{{ soa_id }}/activity/{{ activity_id }}/concepts_cell?edit=1" hx-target="#concepts-cell-{{ activity_id }}" hx-swap="outerHTML" style="background:#455a64;color:#fff;border:none;padding:2px 5px;margin:2px;cursor:pointer;font-size:0.55em;border-radius:3px;" title="Bulk select concepts">Bulk</button>
+    </div>
+  {% endif %}
+</td>

@@ -22,25 +22,14 @@
   </div>
   <div>
     <h3>Activities</h3>
-    {% if activity_total_pages and activity_total_pages > 1 %}
-    <div class="pagination" style="margin-bottom:8px;font-size:0.75em;">
-      Page {{ activity_page }} of {{ activity_total_pages }} ({{ activity_total }} activities)
-      <div style="margin-top:4px;">
-        {% if activity_page > 1 %}<a href="/ui/soa/{{ soa_id }}/edit?page={{ activity_page - 1 }}" class="pg-btn">← Prev</a>{% endif %}
-        {% if activity_page < activity_total_pages %}<a href="/ui/soa/{{ soa_id }}/edit?page={{ activity_page + 1 }}" class="pg-btn">Next →</a>{% endif %}
-      </div>
-    </div>
-    {% endif %}
     <ul>
       {% for a in activities %}
       <li>{{ a.order_index }}. {{ a.name }}
         <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
           <input type="hidden" name="activity_id" value="{{ a.id }}" />
-          <input type="hidden" name="page" value="{{ activity_page }}" />
           <button type="submit" class="delete-btn">✕</button>
         </form>
         <form method="post" action="/ui/soa/{{ soa_id }}/activity/{{ a.id }}/concepts" class="concept-form">
-          <input type="hidden" name="page" value="{{ activity_page }}" />
           <label style="font-size:0.8em;display:block;margin-top:4px;">Biomedical Concepts:
             <button type="button" onclick="refreshConcepts()" class="refresh-btn" title="Force reload concept list">↻</button>
           </label>
@@ -76,7 +65,6 @@
       {% endfor %}
     </ul>
     <form method="post" action="/ui/soa/{{ soa_id }}/add_activity">
-      <input type="hidden" name="page" value="{{ activity_page }}" />
       <input name="name" placeholder="Activity Name" required />
       <button>Add Activity</button>
     </form>
@@ -93,12 +81,11 @@
   {% for a in activities %}
   <tr>
     <td>{{ a.name }}</td>
-    <td class="concepts-cell">
-      {% set concepts_list = activity_concepts.get(a.id, []) %}
-      {% if concepts_list %}
-        {% for ac in concepts_list %}<span class="tag" style="background:#eef; color:#224; margin:2px; display:inline-block; padding:2px 5px; border-radius:3px; font-size:0.65em;">{{ ac.title }}</span>{% endfor %}
-      {% else %}<span class="no-concepts" style="color:#888; font-size:0.65em;">–</span>{% endif %}
-    </td>
+  {% set concepts_list = activity_concepts.get(a.id, []) %}
+  {% set selected_list = concepts_list %}
+  {% set selected_codes = concepts_list | map(attribute='code') | list %}
+  {% set activity_id = a.id %}
+  {% include 'concepts_cell.html' %}
     {% for v in visits %}
       {% set raw_status = cell_map.get((v.id, a.id), '') %}
       {% set display = 'X' if raw_status == 'X' else '' %}
@@ -110,7 +97,6 @@
 <p><a href="/soa/{{ soa_id }}/normalized" target="_blank">Generate Normalized Summary (JSON)</a></p>
 <div class="export-buttons">
   <a class="btn" href="/soa/{{ soa_id }}/export/xlsx" title="Download Excel workbook">⬇ XLSX</a>
-  <a class="btn" href="/soa/{{ soa_id }}/export/pdf" title="Download PDF matrix">⬇ PDF</a>
 </div>
 <style>
   .delete-btn { background:#c62828; color:#fff; border:none; padding:0 6px; cursor:pointer; }
