@@ -86,17 +86,24 @@
 <h3>Matrix</h3>
 <table class="matrix">
   <tr>
-    <th>Activity \ Visit</th>
+    <th>Activity</th>
+    <th>Concepts</th>
     {% for v in visits %}<th>{{ v.name }}</th>{% endfor %}
   </tr>
   {% for a in activities %}
   <tr>
     <td>{{ a.name }}</td>
-  {% for v in visits %}
-  {% set raw_status = cell_map.get((v.id, a.id), '') %}
-  {% set display = 'X' if raw_status == 'X' else '' %}
-  <td hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
-  {% endfor %}
+    <td class="concepts-cell">
+      {% set concepts_list = activity_concepts.get(a.id, []) %}
+      {% if concepts_list %}
+        {% for ac in concepts_list %}<span class="tag" style="background:#eef; color:#224; margin:2px; display:inline-block; padding:2px 5px; border-radius:3px; font-size:0.65em;">{{ ac.title }}</span>{% endfor %}
+      {% else %}<span class="no-concepts" style="color:#888; font-size:0.65em;">–</span>{% endif %}
+    </td>
+    {% for v in visits %}
+      {% set raw_status = cell_map.get((v.id, a.id), '') %}
+      {% set display = 'X' if raw_status == 'X' else '' %}
+      <td hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
+    {% endfor %}
   </tr>
   {% endfor %}
 </table>
