@@ -439,13 +439,14 @@ def _rollback_freeze(soa_id: int, freeze_id: int) -> dict:
     conn = _connect()
     cur = conn.cursor()
     # Clear existing
+    # Order matters: delete cells, then concepts (while activity rows still exist), then activities, then visits.
     cur.execute("DELETE FROM cell WHERE soa_id=?", (soa_id,))
-    cur.execute("DELETE FROM activity WHERE soa_id=?", (soa_id,))
-    cur.execute("DELETE FROM visit WHERE soa_id=?", (soa_id,))
     cur.execute(
         "DELETE FROM activity_concept WHERE activity_id IN (SELECT id FROM activity WHERE soa_id=? )",
         (soa_id,),
     )
+    cur.execute("DELETE FROM activity WHERE soa_id=?", (soa_id,))
+    cur.execute("DELETE FROM visit WHERE soa_id=?", (soa_id,))
     # Reinsert visits mapping old id->new id
     visit_id_map = {}
     for v in sorted(visits, key=lambda x: x.get("order_index", 0)):
