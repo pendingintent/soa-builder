@@ -1,20 +1,34 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>Existing SoAs</h2>
+<h2>Existing Studies</h2>
 <table>
-  <tr><th>ID</th><th>Name</th><th>Created</th><th>Actions</th></tr>
+  <tr>
+    <th>ID</th>
+    <th>Study Name</th>
+    <th>Study ID</th>
+    <th>Label</th>
+    <th>Description</th>
+    <th>Created</th>
+    <th>Actions</th>
+  </tr>
   {% for s in soas %}
   <tr>
     <td>{{ s.id }}</td>
     <td>{{ s.name }}</td>
+    <td>{{ s.study_id or '' }}</td>
+    <td>{{ s.study_label or '' }}</td>
+    <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ s.study_description }}">{{ s.study_description or '' }}</td>
     <td>{{ s.created_at }}</td>
     <td><a href="/ui/soa/{{ s.id }}/edit">Edit</a></td>
   </tr>
   {% endfor %}
 </table>
-<h3>Create New SoA</h3>
-<form method="post" action="/ui/soa/create">
-  <input name="name" placeholder="Trial Name" required />
-  <button type="submit">Create</button>
+<h3>Create New Study</h3>
+<form method="post" action="/ui/soa/create" style="display:grid; gap:8px; max-width:600px;">
+  <input name="name" placeholder="Study Name" required />
+  <input name="study_id" placeholder="Study ID (e.g. ABC-123)" required />
+  <input name="study_label" placeholder="Short Label (e.g. Phase II Breast)" />
+  <textarea name="study_description" rows="3" placeholder="Study Description"></textarea>
+  <button type="submit">Create Study</button>
 </form>
 {% endblock %}

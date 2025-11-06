@@ -31,6 +31,7 @@ import pandas as pd
 from ..normalization import normalize_soa
 import requests, time, logging
 from dotenv import load_dotenv
+import re as _re
 
 load_dotenv()  # must come BEFORE reading env-based configuration so values are populated
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")
@@ -80,6 +81,10 @@ def _init_db():
     cur.execute(
         """CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
     )
+    # Epochs: high-level study phase grouping (optional). Behaves like visits/activities list ordering.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS epoch (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
+    )
     cur.execute(
         """CREATE TABLE IF NOT EXISTS cell (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, visit_id INTEGER, activity_id INTEGER, status TEXT)"""
     )
@@ -108,11 +113,158 @@ def _init_db():
             concepts_restored INTEGER
         )"""
     )
+    # Reorder audit (tracks manual drag reorder operations for visits & activities)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS reorder_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            entity_type TEXT NOT NULL, -- 'visit' | 'activity' | 'epoch'
+            old_order_json TEXT NOT NULL,
+            new_order_json TEXT NOT NULL,
+            performed_at TEXT NOT NULL
+        )"""
+    )
     conn.commit()
     conn.close()
 
 
 _init_db()
+
+
+# --------------------- Migration: add epoch_id to visit ---------------------
+def _migrate_add_epoch_id_to_visit():
+    """Add epoch_id column to visit table if missing."""
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(visit)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "epoch_id" not in cols:
+            cur.execute("ALTER TABLE visit ADD COLUMN epoch_id INTEGER")
+            conn.commit()
+            logger.info("Added epoch_id column to visit table")
+        conn.close()
+    except Exception as e:
+        logger.warning("epoch_id migration failed: %s", e)
+
+
+_migrate_add_epoch_id_to_visit()
+
+
+# --------------------- Migration: add epoch_seq to epoch ---------------------
+def _migrate_add_epoch_seq():
+    """Ensure epoch_seq (immutable sequence per SoA) exists; backfill sequential values per study.
+    Creates unique index (soa_id, epoch_seq) to guarantee uniqueness inside a study.
+    """
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(epoch)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "epoch_seq" not in cols:
+            cur.execute("ALTER TABLE epoch ADD COLUMN epoch_seq INTEGER")
+            conn.commit()
+            logger.info("Added epoch_seq column to epoch table")
+            # Backfill existing epochs with sequential values by id order per soa
+            cur.execute("SELECT DISTINCT soa_id FROM epoch")
+            soa_ids = [r[0] for r in cur.fetchall()]
+            for sid in soa_ids:
+                cur.execute("SELECT id FROM epoch WHERE soa_id=? ORDER BY id", (sid,))
+                ids = [r[0] for r in cur.fetchall()]
+                for seq, eid in enumerate(ids, start=1):
+                    cur.execute("UPDATE epoch SET epoch_seq=? WHERE id=?", (seq, eid))
+            conn.commit()
+        # Unique index (idempotent)
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_epoch_soaid_seq ON epoch(soa_id, epoch_seq)"
+            )
+            conn.commit()
+        except Exception as ie:  # pragma: no cover
+            logger.warning("Failed creating idx_epoch_soaid_seq: %s", ie)
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("epoch_seq migration failed: %s", e)
+
+
+_migrate_add_epoch_seq()
+
+
+# --------------------- Migration: add epoch label/description ---------------------
+def _migrate_add_epoch_label_desc():
+    """Add optional epoch_label and epoch_description columns if missing."""
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(epoch)")
+        cols = {r[1] for r in cur.fetchall()}
+        alters = []
+        if "epoch_label" not in cols:
+            alters.append("ALTER TABLE epoch ADD COLUMN epoch_label TEXT")
+        if "epoch_description" not in cols:
+            alters.append("ALTER TABLE epoch ADD COLUMN epoch_description TEXT")
+        for stmt in alters:
+            try:
+                cur.execute(stmt)
+            except Exception as e:  # pragma: no cover
+                logger.warning(
+                    "Failed epoch label/description migration '%s': %s", stmt, e
+                )
+        if alters:
+            conn.commit()
+            logger.info(
+                "Applied epoch label/description migration: %s", ", ".join(alters)
+            )
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("Epoch label/description migration failed: %s", e)
+
+
+_migrate_add_epoch_label_desc()
+# --------------------- Migrations: add study metadata columns ---------------------
+
+
+def _migrate_add_study_fields():
+    """Ensure study metadata columns (study_id, study_label, study_description) exist on soa table.
+    Safe to run repeatedly; SQLite ADD COLUMN is idempotent when guarded by schema inspection.
+    """
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(soa)")
+        existing = {r[1] for r in cur.fetchall()}  # column names
+        alters = []
+        if "study_id" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_id TEXT")
+        if "study_label" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_label TEXT")
+        if "study_description" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_description TEXT")
+        for stmt in alters:
+            try:
+                cur.execute(stmt)
+            except (
+                Exception
+            ) as e:  # pragma: no cover - defensive; should not fail normally
+                logger.warning("Failed executing migration statement '%s': %s", stmt, e)
+        if alters:
+            conn.commit()
+        # Create unique index on study_id (NULLs allowed multiple times by SQLite)
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_soa_study_id ON soa(study_id)"
+            )
+            conn.commit()
+        except Exception as e:  # pragma: no cover
+            logger.warning("Failed creating unique index idx_soa_study_id: %s", e)
+        conn.close()
+        if alters:
+            logger.info("Applied study field migrations: %s", ", ".join(alters))
+    except Exception as e:  # pragma: no cover
+        logger.warning("Study field migration failed: %s", e)
+
+
+_migrate_add_study_fields()
 
 # --------------------- Migrations ---------------------
 
@@ -148,15 +300,37 @@ _drop_unused_override_table()
 
 class SOACreate(BaseModel):
     name: str
+    study_id: Optional[str] = None
+    study_label: Optional[str] = None
+    study_description: Optional[str] = None
+
+
+class SOAMetadataUpdate(BaseModel):
+    study_id: Optional[str] = None
+    study_label: Optional[str] = None
+    study_description: Optional[str] = None
 
 
 class VisitCreate(BaseModel):
     name: str
     raw_header: Optional[str] = None
+    epoch_id: Optional[int] = None
 
 
 class ActivityCreate(BaseModel):
     name: str
+
+
+class EpochCreate(BaseModel):
+    name: str
+    epoch_label: Optional[str] = None
+    epoch_description: Optional[str] = None
+
+
+class EpochUpdate(BaseModel):
+    name: Optional[str] = None
+    epoch_label: Optional[str] = None
+    epoch_description: Optional[str] = None
 
 
 class ConceptsUpdate(BaseModel):
@@ -221,10 +395,35 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     if version_label in existing_labels:
         raise HTTPException(400, "Version label already exists for this SOA")
     # Gather snapshot data
-    cur.execute("SELECT name, created_at FROM soa WHERE id=?", (soa_id,))
+    cur.execute(
+        "SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?",
+        (soa_id,),
+    )
     row = cur.fetchone()
     soa_name = row[0] if row else f"SOA {soa_id}"
+    study_id_val = row[2] if row else None
+    study_label_val = row[3] if row else None
+    study_description_val = row[4] if row else None
     visits, activities, cells = _fetch_matrix(soa_id)
+    # Epochs snapshot (ordered)
+    conn2 = _connect()
+    cur2 = conn2.cursor()
+    cur2.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur2.fetchall()
+    ]
+    conn2.close()
     # Concept mapping
     activity_ids = [a["id"] for a in activities]
     concepts_map = {}
@@ -239,8 +438,12 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     snapshot = {
         "soa_id": soa_id,
         "soa_name": soa_name,
+        "study_id": study_id_val,
+        "study_label": study_label_val,
+        "study_description": study_description_val,
         "version_label": version_label,
         "frozen_at": datetime.now(timezone.utc).isoformat(),
+        "epochs": epochs,
         "visits": visits,
         "activities": activities,
         "cells": cells,
@@ -532,6 +735,61 @@ def _record_rollback_audit(soa_id: int, freeze_id: int, stats: dict):
     conn.close()
 
 
+def _record_reorder_audit(
+    soa_id: int, entity_type: str, old_order: list[int], new_order: list[int]
+):
+    """Persist a reorder audit record if ordering truly changed.
+
+    Parameters:
+      soa_id: owning SoA id
+            entity_type: 'visit' | 'activity' | 'epoch'
+      old_order: list of IDs before reorder (ascending order_index)
+      new_order: list of IDs after reorder (ascending order_index)
+    """
+    try:
+        if old_order == new_order:
+            return  # no change
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO reorder_audit (soa_id, entity_type, old_order_json, new_order_json, performed_at) VALUES (?,?,?,?,?)",
+            (
+                soa_id,
+                entity_type,
+                json.dumps(old_order),
+                json.dumps(new_order),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except (
+        Exception
+    ) as e:  # pragma: no cover - audit failure should not break core flow
+        logger.warning("Failed to record reorder audit: %s", e)
+
+
+def _list_reorder_audit(soa_id: int) -> list[dict]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, entity_type, old_order_json, new_order_json, performed_at FROM reorder_audit WHERE soa_id=? ORDER BY id DESC",
+        (soa_id,),
+    )
+    rows = [
+        {
+            "id": r[0],
+            "entity_type": r[1],
+            "old_order": json.loads(r[2]) if r[2] else [],
+            "new_order": json.loads(r[3]) if r[3] else [],
+            "performed_at": r[4],
+        }
+        for r in cur.fetchall()
+    ]
+    conn.close()
+    return rows
+
+
 def _list_rollback_audit(soa_id: int) -> list[dict]:
     conn = _connect()
     cur = conn.cursor()
@@ -615,12 +873,13 @@ def _soa_exists(soa_id: int) -> bool:
 def _fetch_matrix(soa_id: int):
     conn = _connect()
     cur = conn.cursor()
+    # Epochs not part of matrix axes currently; retrieved separately where needed.
     cur.execute(
-        "SELECT id,name,raw_header,order_index FROM visit WHERE soa_id=? ORDER BY order_index",
+        "SELECT id,name,raw_header,order_index,epoch_id FROM visit WHERE soa_id=? ORDER BY order_index",
         (soa_id,),
     )
     visits = [
-        dict(id=r[0], name=r[1], raw_header=r[2], order_index=r[3])
+        dict(id=r[0], name=r[1], raw_header=r[2], order_index=r[3], epoch_id=r[4])
         for r in cur.fetchall()
     ]
     cur.execute(
@@ -916,6 +1175,13 @@ def get_rollback_audit_json(soa_id: int):
     return {"audit": _list_rollback_audit(soa_id)}
 
 
+@app.get("/soa/{soa_id}/reorder_audit")
+def get_reorder_audit_json(soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return {"audit": _list_reorder_audit(soa_id)}
+
+
 @app.get("/ui/soa/{soa_id}/rollback_audit", response_class=HTMLResponse)
 def ui_rollback_audit(request: Request, soa_id: int):
     if not _soa_exists(soa_id):
@@ -923,6 +1189,16 @@ def ui_rollback_audit(request: Request, soa_id: int):
     return templates.TemplateResponse(
         "rollback_audit_modal.html",
         {"request": request, "soa_id": soa_id, "audit": _list_rollback_audit(soa_id)},
+    )
+
+
+@app.get("/ui/soa/{soa_id}/reorder_audit", response_class=HTMLResponse)
+def ui_reorder_audit(request: Request, soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return templates.TemplateResponse(
+        "reorder_audit_modal.html",
+        {"request": request, "soa_id": soa_id, "audit": _list_reorder_audit(soa_id)},
     )
 
 
@@ -955,6 +1231,95 @@ def export_rollback_audit_xlsx(soa_id: int):
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/soa/{soa_id}/reorder_audit/export/xlsx")
+def export_reorder_audit_xlsx(soa_id: int):
+    """Export reorder audit history (visit/activity reorders) to Excel."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    rows = _list_reorder_audit(soa_id)
+    # Flatten old/new order arrays to strings for readability
+    flat_rows = []
+    for r in rows:
+        moves = []
+        old_pos = {vid: idx + 1 for idx, vid in enumerate(r.get("old_order", []))}
+        new_order = r.get("new_order", [])
+        for idx, vid in enumerate(new_order, start=1):
+            op = old_pos.get(vid)
+            if op and op != idx:
+                moves.append(f"{vid}:{op}->{idx}")
+        flat_rows.append(
+            {
+                "id": r.get("id"),
+                "entity_type": r.get("entity_type"),
+                "performed_at": r.get("performed_at"),
+                "old_order": ",".join(map(str, r.get("old_order", []))),
+                "new_order": ",".join(map(str, new_order)),
+                "moves": "; ".join(moves) if moves else "",
+            }
+        )
+    df = pd.DataFrame(flat_rows)
+    if df.empty:
+        df = pd.DataFrame(
+            columns=[
+                "id",
+                "entity_type",
+                "performed_at",
+                "old_order",
+                "new_order",
+                "moves",
+            ]
+        )
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="ReorderAudit")
+    bio.seek(0)
+    filename = f"soa_{soa_id}_reorder_audit.xlsx"
+    return StreamingResponse(
+        bio,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/soa/{soa_id}/reorder_audit/export/csv")
+def export_reorder_audit_csv(soa_id: int):
+    """Export reorder audit history to CSV."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    rows = _list_reorder_audit(soa_id)
+    # Prepare CSV lines
+    header = ["id", "entity_type", "performed_at", "old_order", "new_order", "moves"]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(header)
+    for r in rows:
+        old_order = r.get("old_order", [])
+        new_order = r.get("new_order", [])
+        moves = []
+        old_pos = {vid: idx + 1 for idx, vid in enumerate(old_order)}
+        for idx, vid in enumerate(new_order, start=1):
+            op = old_pos.get(vid)
+            if op and op != idx:
+                moves.append(f"{vid}:{op}->{idx}")
+        writer.writerow(
+            [
+                r.get("id"),
+                r.get("entity_type"),
+                r.get("performed_at"),
+                ",".join(map(str, old_order)),
+                ",".join(map(str, new_order)),
+                "; ".join(moves) if moves else "",
+            ]
+        )
+    output.seek(0)
+    filename = f"soa_{soa_id}_reorder_audit.csv"
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -1033,14 +1398,32 @@ def _matrix_arrays(soa_id: int):
 def create_soa(payload: SOACreate):
     conn = _connect()
     cur = conn.cursor()
+    # Enforce unique study_id if provided
+    if payload.study_id and payload.study_id.strip():
+        cur.execute("SELECT 1 FROM soa WHERE study_id=?", (payload.study_id.strip(),))
+        if cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "study_id already exists")
     cur.execute(
-        "INSERT INTO soa (name, created_at) VALUES (?, ?)",
-        (payload.name, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO soa (name, created_at, study_id, study_label, study_description) VALUES (?,?,?,?,?)",
+        (
+            payload.name,
+            datetime.now(timezone.utc).isoformat(),
+            (payload.study_id or "").strip() or None,
+            (payload.study_label or "").strip() or None,
+            (payload.study_description or "").strip() or None,
+        ),
     )
     soa_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": soa_id, "name": payload.name}
+    return {
+        "id": soa_id,
+        "name": payload.name,
+        "study_id": payload.study_id,
+        "study_label": payload.study_label,
+        "study_description": payload.study_description,
+    }
 
 
 @app.get("/soa/{soa_id}")
@@ -1048,7 +1431,91 @@ def get_soa(soa_id: int):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
     visits, activities, cells = _fetch_matrix(soa_id)
-    return {"id": soa_id, "visits": visits, "activities": activities, "cells": cells}
+    # Fetch epochs
+    conn_ep = _connect()
+    cur_ep = conn_ep.cursor()
+    cur_ep.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur_ep.fetchall()
+    ]
+    conn_ep.close()
+    # Also include study metadata if present
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,)
+    )
+    meta_row = cur.fetchone()
+    conn.close()
+    study_meta = (
+        {
+            "study_id": meta_row[0],
+            "study_label": meta_row[1],
+            "study_description": meta_row[2],
+        }
+        if meta_row
+        else {}
+    )
+    return {
+        "id": soa_id,
+        **study_meta,
+        "epochs": epochs,
+        "visits": visits,
+        "activities": activities,
+        "cells": cells,
+    }
+
+
+@app.post("/soa/{soa_id}/metadata")
+def update_soa_metadata(soa_id: int, payload: SOAMetadataUpdate):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    # Fetch current study_id to enforce non-blank persistence
+    cur.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row = cur.fetchone()
+    current_study_id = row[0] if row else None
+    proposed = (payload.study_id or "").strip()
+    if proposed == "" and current_study_id:
+        # Ignore clearing attempt – keep existing value
+        new_study_id = current_study_id
+    else:
+        new_study_id = proposed or None
+    if new_study_id:
+        cur.execute(
+            "SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id)
+        )
+        if cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "study_id already exists")
+    # If there was no previous study_id and none provided now, reject
+    if not current_study_id and not new_study_id:
+        conn.close()
+        raise HTTPException(400, "study_id is required and cannot be blank")
+    cur.execute(
+        "UPDATE soa SET study_id=?, study_label=?, study_description=? WHERE id=?",
+        (
+            new_study_id,
+            (payload.study_label or "").strip() or None,
+            (payload.study_description or "").strip() or None,
+            soa_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": soa_id, "updated": True}
 
 
 @app.post("/soa/{soa_id}/visits")
@@ -1059,9 +1526,22 @@ def add_visit(soa_id: int, payload: VisitCreate):
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM visit WHERE soa_id=?", (soa_id,))
     order_index = cur.fetchone()[0] + 1
+    if payload.epoch_id is not None:
+        cur.execute(
+            "SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (payload.epoch_id, soa_id)
+        )
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "Invalid epoch_id for this SOA")
     cur.execute(
-        "INSERT INTO visit (soa_id,name,raw_header,order_index) VALUES (?,?,?,?)",
-        (soa_id, payload.name, payload.raw_header or payload.name, order_index),
+        "INSERT INTO visit (soa_id,name,raw_header,order_index,epoch_id) VALUES (?,?,?,?,?)",
+        (
+            soa_id,
+            payload.name,
+            payload.raw_header or payload.name,
+            order_index,
+            payload.epoch_id,
+        ),
     )
     vid = cur.lastrowid
     conn.commit()
@@ -1085,6 +1565,129 @@ def add_activity(soa_id: int, payload: ActivityCreate):
     conn.commit()
     conn.close()
     return {"activity_id": aid, "order_index": order_index}
+
+
+@app.post("/soa/{soa_id}/epochs")
+def add_epoch(soa_id: int, payload: EpochCreate):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM epoch WHERE soa_id=?", (soa_id,))
+    order_index = cur.fetchone()[0] + 1
+    # Immutable sequence per study
+    cur.execute("SELECT MAX(epoch_seq) FROM epoch WHERE soa_id=?", (soa_id,))
+    row = cur.fetchone()
+    next_seq = (row[0] or 0) + 1
+    cur.execute(
+        "INSERT INTO epoch (soa_id,name,order_index,epoch_seq,epoch_label,epoch_description) VALUES (?,?,?,?,?,?)",
+        (
+            soa_id,
+            payload.name,
+            order_index,
+            next_seq,
+            (payload.epoch_label or "").strip() or None,
+            (payload.epoch_description or "").strip() or None,
+        ),
+    )
+    eid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return {"epoch_id": eid, "order_index": order_index, "epoch_seq": next_seq}
+
+
+@app.get("/soa/{soa_id}/epochs")
+def list_epochs(soa_id: int):
+    """Return ordered list of epoch metadata for a study."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    rows = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "order_index": r[2],
+            "epoch_seq": r[3],
+            "epoch_label": r[4],
+            "epoch_description": r[5],
+        }
+        for r in cur.fetchall()
+    ]
+    conn.close()
+    return {"soa_id": soa_id, "epochs": rows}
+
+
+@app.get("/soa/{soa_id}/epochs/{epoch_id}")
+def get_epoch(soa_id: int, epoch_id: int):
+    """Return metadata for a single epoch."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=? AND soa_id=?",
+        (epoch_id, soa_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Epoch not found")
+    return {
+        "id": row[0],
+        "soa_id": soa_id,
+        "name": row[1],
+        "order_index": row[2],
+        "epoch_seq": row[3],
+        "epoch_label": row[4],
+        "epoch_description": row[5],
+    }
+
+
+@app.post("/soa/{soa_id}/epochs/{epoch_id}/metadata")
+def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
+    """Update mutable epoch metadata (name, label, description)."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (epoch_id, soa_id))
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(404, "Epoch not found")
+    sets = []
+    vals = []
+    if payload.name is not None:
+        sets.append("name=?")
+        vals.append((payload.name or "").strip() or None)
+    if payload.epoch_label is not None:
+        sets.append("epoch_label=?")
+        vals.append((payload.epoch_label or "").strip() or None)
+    if payload.epoch_description is not None:
+        sets.append("epoch_description=?")
+        vals.append((payload.epoch_description or "").strip() or None)
+    if sets:
+        vals.append(epoch_id)
+        cur.execute(f"UPDATE epoch SET {', '.join(sets)} WHERE id=?", vals)
+        conn.commit()
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?",
+        (epoch_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return {
+        "id": row[0],
+        "name": row[1],
+        "order_index": row[2],
+        "epoch_seq": row[3],
+        "epoch_label": row[4],
+        "epoch_description": row[5],
+    }
 
 
 @app.post("/soa/{soa_id}/activities/{activity_id}/concepts")
@@ -1358,6 +1961,59 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
             ]
         )
     bio = io.BytesIO()
+    # Prepare cover sheet metadata
+    # Fetch study core metadata (name, study fields, created_at)
+    conn_info = _connect()
+    cur_info = conn_info.cursor()
+    cur_info.execute(
+        "SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?",
+        (soa_id,),
+    )
+    info_row = cur_info.fetchone()
+    conn_info.close()
+    if info_row:
+        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = (
+            info_row
+        )
+    else:
+        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = (
+            f"SOA {soa_id}",
+            None,
+            None,
+            None,
+            None,
+        )
+    freezes = _list_freezes(soa_id)
+    last_freeze_label = freezes[0]["version_label"] if freezes else None
+    last_freeze_time = freezes[0]["created_at"] if freezes else None
+    left_freeze = _get_freeze(soa_id, left) if left else None
+    right_freeze = _get_freeze(soa_id, right) if right else None
+    concept_mapping_count = len(mapping_rows)
+    cell_count = len(cells)
+    meta_rows = [
+        ["Study ID", study_id_val or ""],
+        ["Study Name", soa_name_val],
+        ["Study Label", study_label_val or ""],
+        ["Study Description", (study_desc_val or "")[:4000]],
+        ["Created At", created_at_val or ""],
+        ["Visit Count", str(len(visits))],
+        ["Activity Count", str(len(activities))],
+        ["Cell Count", str(cell_count)],
+        ["Concept Mapping Count", str(concept_mapping_count)],
+        ["Frozen Versions Count", str(len(freezes))],
+        ["Latest Freeze Label", last_freeze_label or ""],
+        ["Latest Freeze Time", last_freeze_time or ""],
+    ]
+    if left_freeze and right_freeze:
+        meta_rows.extend(
+            [
+                ["Diff Left Label", left_freeze.get("version_label")],
+                ["Diff Left Frozen At", left_freeze.get("created_at")],
+                ["Diff Right Label", right_freeze.get("version_label")],
+                ["Diff Right Frozen At", right_freeze.get("created_at")],
+            ]
+        )
+    study_df = pd.DataFrame(meta_rows, columns=["Key", "Value"])
     # Optional concept diff sheet if left/right provided
     concept_diff_df = None
     if left and right:
@@ -1411,13 +2067,43 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
             # Provide an error sheet to highlight issue rather than failing entire export
             concept_diff_df = pd.DataFrame([[str(e)]], columns=["ConceptDiffError"])
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        study_df.to_excel(writer, index=False, sheet_name="Study")
         df.to_excel(writer, index=False, sheet_name="SoA")
         mapping_df.to_excel(writer, index=False, sheet_name="ConceptMappings")
         audit_df.to_excel(writer, index=False, sheet_name="RollbackAudit")
         if concept_diff_df is not None:
             concept_diff_df.to_excel(writer, index=False, sheet_name="ConceptDiff")
     bio.seek(0)
-    filename = f"soa_{soa_id}_matrix.xlsx"
+    # Dynamic filename pattern: studyid_version.xlsx
+    # Determine study_id and version context
+    conn_meta = _connect()
+    cur_meta = conn_meta.cursor()
+    cur_meta.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row_meta = cur_meta.fetchone()
+    conn_meta.close()
+    study_id_val = (row_meta[0] if row_meta else None) or f"soa{soa_id}"
+    # Sanitize study_id for filename (keep alnum, '-', '_')
+
+    safe_study = (
+        _re.sub(r"[^A-Za-z0-9_-]+", "-", study_id_val.strip())[:80] or f"soa{soa_id}"
+    )
+    version_segment = ""
+    if left and right:
+        # Diff export: include both labels
+        left_f = _get_freeze(soa_id, left)
+        right_f = _get_freeze(soa_id, right)
+        left_label = left_f.get("version_label") if left_f else f"v{left}"
+        right_label = right_f.get("version_label") if right_f else f"v{right}"
+        version_segment = f"{left_label}_vs_{right_label}"
+    else:
+        freezes = _list_freezes(soa_id)
+        if freezes:
+            version_segment = freezes[0]["version_label"] or f"v{freezes[0]['id']}"
+        else:
+            # No freezes yet: assume initial version number 1
+            version_segment = "v1"
+    safe_version = _re.sub(r"[^A-Za-z0-9._-]+", "-", version_segment)[:60]
+    filename = f"{safe_study}_{safe_version}.xlsx"
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1564,6 +2250,23 @@ def delete_activity(soa_id: int, activity_id: int):
     return {"deleted_activity_id": activity_id}
 
 
+@app.delete("/soa/{soa_id}/epochs/{epoch_id}")
+def delete_epoch(soa_id: int, epoch_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (epoch_id, soa_id))
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(404, "Epoch not found")
+    cur.execute("DELETE FROM epoch WHERE id=?", (epoch_id,))
+    conn.commit()
+    conn.close()
+    _reindex("epoch", soa_id)
+    return {"deleted_epoch_id": epoch_id}
+
+
 # --------------------- HTML UI Endpoints ---------------------
 
 
@@ -1571,25 +2274,57 @@ def delete_activity(soa_id: int, activity_id: int):
 def ui_index(request: Request):
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT id,name,created_at FROM soa ORDER BY id DESC")
+    cur.execute(
+        "SELECT id,name,created_at,study_id,study_label,study_description FROM soa ORDER BY id DESC"
+    )
     rows = cur.fetchall()
     conn.close()
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "soas": [{"id": r[0], "name": r[1], "created_at": r[2]} for r in rows],
+            "soas": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "created_at": r[2],
+                    "study_id": r[3],
+                    "study_label": r[4],
+                    "study_description": r[5],
+                }
+                for r in rows
+            ],
         },
     )
 
 
 @app.post("/ui/soa/create", response_class=HTMLResponse)
-def ui_create_soa(request: Request, name: str = Form(...)):
+def ui_create_soa(
+    request: Request,
+    name: str = Form(...),
+    study_id: Optional[str] = Form(None),
+    study_label: Optional[str] = Form(None),
+    study_description: Optional[str] = Form(None),
+):
     conn = _connect()
     cur = conn.cursor()
+    # Uniqueness check
+    if study_id and study_id.strip():
+        cur.execute("SELECT 1 FROM soa WHERE study_id=?", (study_id.strip(),))
+        if cur.fetchone():
+            conn.close()
+            return HTMLResponse(
+                "<script>alert('study_id already exists');window.location='/'</script>"
+            )
     cur.execute(
-        "INSERT INTO soa (name, created_at) VALUES (?,?)",
-        (name, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO soa (name, created_at, study_id, study_label, study_description) VALUES (?,?,?,?,?)",
+        (
+            name,
+            datetime.now(timezone.utc).isoformat(),
+            (study_id or "").strip() or None,
+            (study_label or "").strip() or None,
+            (study_description or "").strip() or None,
+        ),
     )
     sid = cur.lastrowid
     conn.commit()
@@ -1597,11 +2332,80 @@ def ui_create_soa(request: Request, name: str = Form(...)):
     return HTMLResponse(f"<script>window.location='/ui/soa/{sid}/edit';</script>")
 
 
+@app.post("/ui/soa/{soa_id}/update_meta", response_class=HTMLResponse)
+def ui_update_meta(
+    request: Request,
+    soa_id: int,
+    study_id: Optional[str] = Form(None),
+    study_label: Optional[str] = Form(None),
+    study_description: Optional[str] = Form(None),
+):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row = cur.fetchone()
+    current_study_id = row[0] if row else None
+    proposed = (study_id or "").strip()
+    if proposed == "" and current_study_id:
+        new_study_id = current_study_id  # preserve existing
+    else:
+        new_study_id = proposed or None
+    if new_study_id:
+        cur.execute(
+            "SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id)
+        )
+        if cur.fetchone():
+            conn.close()
+            return HTMLResponse(
+                "<script>alert('study_id already exists');window.location='/ui/soa/%d/edit';</script>"
+                % soa_id
+            )
+    if not current_study_id and not new_study_id:
+        conn.close()
+        return HTMLResponse(
+            "<script>alert('study_id is required');window.location='/ui/soa/%d/edit';</script>"
+            % soa_id
+        )
+    cur.execute(
+        "UPDATE soa SET study_id=?, study_label=?, study_description=? WHERE id=?",
+        (
+            new_study_id,
+            (study_label or "").strip() or None,
+            (study_description or "").strip() or None,
+            soa_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
 @app.get("/ui/soa/{soa_id}/edit", response_class=HTMLResponse)
 def ui_edit(request: Request, soa_id: int):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
     visits, activities, cells = _fetch_matrix(soa_id)
+    # Epochs list
+    conn_ep = _connect()
+    cur_ep = conn_ep.cursor()
+    cur_ep.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur_ep.fetchall()
+    ]
+    conn_ep.close()
     # No pagination: use all activities
     activities_page = activities
     # Build cell lookup
@@ -1645,11 +2449,25 @@ def ui_edit(request: Request, soa_id: int):
             last_fetch_relative = f"{secs//3600}h ago"
     freeze_list = _list_freezes(soa_id)
     last_frozen_at = freeze_list[0]["created_at"] if freeze_list else None
+    # Study metadata for edit form
+    conn_meta = _connect()
+    cur_meta = conn_meta.cursor()
+    cur_meta.execute(
+        "SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,)
+    )
+    meta_row = cur_meta.fetchone()
+    conn_meta.close()
+    study_meta = {
+        "study_id": meta_row[0] if meta_row else None,
+        "study_label": meta_row[1] if meta_row else None,
+        "study_description": meta_row[2] if meta_row else None,
+    }
     return templates.TemplateResponse(
         "edit.html",
         {
             "request": request,
             "soa_id": soa_id,
+            "epochs": epochs,
             "visits": visits,
             "activities": activities_page,
             "cell_map": cell_map,
@@ -1662,21 +2480,75 @@ def ui_edit(request: Request, soa_id: int):
             "freezes": freeze_list,
             "freeze_count": len(freeze_list),
             "last_frozen_at": last_frozen_at,
+            **study_meta,
         },
     )
 
 
 @app.post("/ui/soa/{soa_id}/add_visit", response_class=HTMLResponse)
 def ui_add_visit(
-    request: Request, soa_id: int, name: str = Form(...), raw_header: str = Form("")
+    request: Request,
+    soa_id: int,
+    name: str = Form(...),
+    raw_header: str = Form(""),
+    epoch_id: Optional[int] = Form(None),
 ):
-    add_visit(soa_id, VisitCreate(name=name, raw_header=raw_header or name))
+    add_visit(
+        soa_id, VisitCreate(name=name, raw_header=raw_header or name, epoch_id=epoch_id)
+    )
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
 @app.post("/ui/soa/{soa_id}/add_activity", response_class=HTMLResponse)
 def ui_add_activity(request: Request, soa_id: int, name: str = Form(...)):
     add_activity(soa_id, ActivityCreate(name=name))
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/add_epoch", response_class=HTMLResponse)
+def ui_add_epoch(
+    request: Request,
+    soa_id: int,
+    name: str = Form(...),
+    epoch_label: Optional[str] = Form(None),
+    epoch_description: Optional[str] = Form(None),
+):
+    add_epoch(
+        soa_id,
+        EpochCreate(
+            name=name,
+            epoch_label=epoch_label or None,
+            epoch_description=epoch_description or None,
+        ),
+    )
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/update_epoch", response_class=HTMLResponse)
+def ui_update_epoch(
+    request: Request,
+    soa_id: int,
+    epoch_id: int = Form(...),
+    name: Optional[str] = Form(None),
+    epoch_label: Optional[str] = Form(None),
+    epoch_description: Optional[str] = Form(None),
+):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    payload = EpochUpdate(
+        name=name,
+        epoch_label=epoch_label,
+        epoch_description=epoch_description,
+    )
+    # Reuse API logic
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (epoch_id, soa_id))
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(404, "Epoch not found")
+    conn.close()
+    update_epoch_metadata(soa_id, epoch_id, payload)
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
@@ -1815,10 +2687,124 @@ def ui_delete_visit(request: Request, soa_id: int, visit_id: int = Form(...)):
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
+@app.post("/ui/soa/{soa_id}/set_visit_epoch", response_class=HTMLResponse)
+def ui_set_visit_epoch(
+    request: Request,
+    soa_id: int,
+    visit_id: int = Form(...),
+    epoch_id: Optional[int] = Form(None),
+):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM visit WHERE id=? AND soa_id=?", (visit_id, soa_id))
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(404, "Visit not found")
+    # Validate epoch (allow clearing with None)
+    if epoch_id is not None:
+        cur.execute("SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (epoch_id, soa_id))
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "Invalid epoch_id for this SOA")
+    cur.execute("UPDATE visit SET epoch_id=? WHERE id=?", (epoch_id, visit_id))
+    conn.commit()
+    conn.close()
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
 @app.post("/ui/soa/{soa_id}/delete_activity", response_class=HTMLResponse)
 def ui_delete_activity(request: Request, soa_id: int, activity_id: int = Form(...)):
     delete_activity(soa_id, activity_id)
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/delete_epoch", response_class=HTMLResponse)
+def ui_delete_epoch(request: Request, soa_id: int, epoch_id: int = Form(...)):
+    delete_epoch(soa_id, epoch_id)
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/reorder_visits", response_class=HTMLResponse)
+def ui_reorder_visits(request: Request, soa_id: int, order: str = Form("")):
+    """Persist new visit ordering. 'order' is a comma-separated list of visit IDs in desired order."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    ids = [int(x) for x in order.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse("Invalid order", status_code=400)
+    conn = _connect()
+    cur = conn.cursor()
+    # Capture existing order BEFORE modifications
+    cur.execute("SELECT id FROM visit WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    # Validate membership
+    cur.execute("SELECT id FROM visit WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(ids) - existing:
+        conn.close()
+        return HTMLResponse("Order contains invalid visit id", status_code=400)
+    # Apply new order indices
+    for idx, vid in enumerate(ids, start=1):
+        cur.execute("UPDATE visit SET order_index=? WHERE id=?", (idx, vid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "visit", old_order, ids)
+    return HTMLResponse("OK")
+
+
+@app.post("/ui/soa/{soa_id}/reorder_activities", response_class=HTMLResponse)
+def ui_reorder_activities(request: Request, soa_id: int, order: str = Form("")):
+    """Persist new activity ordering. 'order' is a comma-separated list of activity IDs in desired order."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    ids = [int(x) for x in order.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse("Invalid order", status_code=400)
+    conn = _connect()
+    cur = conn.cursor()
+    # Capture previous order
+    cur.execute(
+        "SELECT id FROM activity WHERE soa_id=? ORDER BY order_index", (soa_id,)
+    )
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM activity WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(ids) - existing:
+        conn.close()
+        return HTMLResponse("Order contains invalid activity id", status_code=400)
+    for idx, aid in enumerate(ids, start=1):
+        cur.execute("UPDATE activity SET order_index=? WHERE id=?", (idx, aid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "activity", old_order, ids)
+    return HTMLResponse("OK")
+
+
+@app.post("/ui/soa/{soa_id}/reorder_epochs", response_class=HTMLResponse)
+def ui_reorder_epochs(request: Request, soa_id: int, order: str = Form("")):
+    """Persist new epoch ordering."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    ids = [int(x) for x in order.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse("Invalid order", status_code=400)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM epoch WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM epoch WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(ids) - existing:
+        conn.close()
+        return HTMLResponse("Order contains invalid epoch id", status_code=400)
+    for idx, eid in enumerate(ids, start=1):
+        cur.execute("UPDATE epoch SET order_index=? WHERE id=?", (idx, eid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "epoch", old_order, ids)
+    return HTMLResponse("OK")
 
 
 # --------------------- Entry ---------------------

@@ -1,6 +1,27 @@
 {% extends 'base.html' %}
 {% block content %}
 <h2>Editing SoA {{ soa_id }}</h2>
+<div class="study-meta" style="background:#f5f5f5;padding:8px 10px;border:1px solid #ddd;border-radius:4px;margin-bottom:12px;font-size:0.8em;">
+  <strong>Study Metadata</strong>
+  <form method="post" action="/ui/soa/{{ soa_id }}/update_meta" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px;align-items:start;">
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <label for="study_id">Study ID *</label>
+      <input id="study_id" name="study_id" value="{{ study_id or '' }}" placeholder="Unique Study ID" required />
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <label for="study_label">Label</label>
+      <input id="study_label" name="study_label" value="{{ study_label or '' }}" placeholder="Short Label" />
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;grid-column:1/-1;">
+      <label for="study_description">Description</label>
+      <textarea id="study_description" name="study_description" rows="3" placeholder="Study Description">{{ study_description or '' }}</textarea>
+    </div>
+    <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button type="submit" style="background:#1976d2;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;">Update Metadata</button>
+      <small style="color:#555;">Study ID must be unique and cannot be cleared once set. Other fields may be left blank to clear.</small>
+    </div>
+  </form>
+</div>
 <div class="freeze-bar" style="margin-bottom:12px;display:flex;flex-direction:column;gap:6px;">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <form hx-post="/ui/soa/{{ soa_id }}/freeze" hx-target="#freeze-feedback" hx-swap="innerHTML" style="display:flex;align-items:center;gap:4px;">
@@ -25,7 +46,10 @@
     </div>
     <div style="font-size:0.6em;margin-top:4px;">
       <button hx-get="/ui/soa/{{ soa_id }}/rollback_audit" hx-target="#modal-host" hx-swap="innerHTML" style="background:#37474f;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Rollback Audit Log</button>
-      <a href="/soa/{{ soa_id }}/rollback_audit/export/xlsx" style="background:#1976d2;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Export Audit XLSX</a>
+  <button hx-get="/ui/soa/{{ soa_id }}/reorder_audit" hx-target="#modal-host" hx-swap="innerHTML" style="background:#546e7a;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Reorder Audit Log</button>
+  <a href="/soa/{{ soa_id }}/rollback_audit/export/xlsx" style="background:#1976d2;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Rollback Audit XLSX</a>
+  <a href="/soa/{{ soa_id }}/reorder_audit/export/xlsx" style="background:#00796b;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Reorder Audit XLSX</a>
+  <a href="/soa/{{ soa_id }}/reorder_audit/export/csv" style="background:#00838f;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Reorder CSV</a>
     </div>
     <div class="freeze-diff" style="font-size:0.65em;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;">
       <strong>Diff:</strong>
@@ -58,39 +82,88 @@
 </div>
 <div class="flex">
   <div>
-    <h3>Visits</h3>
-    <ul>
-      {% for v in visits %}
-      <li>{{ v.order_index }}. {{ v.name }} ({{ v.raw_header }})
-        <form hx-post="/ui/soa/{{ soa_id }}/delete_visit" hx-confirm="Delete visit '{{ v.name }}' and its cells?" style="display:inline">
-          <input type="hidden" name="visit_id" value="{{ v.id }}" />
-          <button type="submit" class="delete-btn">✕</button>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
-    <form method="post" action="/ui/soa/{{ soa_id }}/add_visit">
-      <input name="name" placeholder="Visit Name" required />
-      <input name="raw_header" placeholder="Raw Header (optional)" />
-      <button>Add Visit</button>
-    </form>
+    <details id="epochs-section" open class="collapsible">
+      <summary>Epochs ({{ epochs|length }}) <span class="hint">(drag to reorder)</span></summary>
+      <ul id="epochs-list" class="drag-list">
+        {% for e in epochs %}
+        <li class="drag-item" draggable="true" data-id="{{ e.id }}" title="{{ e.epoch_description or '' }}">
+          <span class="ord">{{ e.order_index }}</span>. <strong>E{{ e.epoch_seq }}</strong> {{ e.name }}
+          {% if e.epoch_label %}<em style="color:#555;font-size:0.7em;">[{{ e.epoch_label }}]</em>{% endif %}
+          <form hx-post="/ui/soa/{{ soa_id }}/delete_epoch" hx-confirm="Delete epoch '{{ e.name }}'?" style="display:inline">
+            <input type="hidden" name="epoch_id" value="{{ e.id }}" />
+            <button type="submit" class="delete-btn">✕</button>
+          </form>
+          <form method="post" action="/ui/soa/{{ soa_id }}/update_epoch" style="display:inline;margin-left:6px;font-size:0.6em;">
+            <input type="hidden" name="epoch_id" value="{{ e.id }}" />
+            <input name="name" value="{{ e.name }}" placeholder="Name" style="width:90px;" />
+            <input name="epoch_label" value="{{ e.epoch_label or '' }}" placeholder="Label" style="width:70px;" />
+            <input name="epoch_description" value="{{ e.epoch_description or '' }}" placeholder="Desc" style="width:120px;" />
+            <button style="background:#607d8b;color:#fff;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;">Save</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/ui/soa/{{ soa_id }}/add_epoch" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+        <input name="name" placeholder="Epoch Name" required style="flex:1;min-width:120px;" />
+        <input name="epoch_label" placeholder="Label (optional)" style="flex:1;min-width:110px;" />
+        <input name="epoch_description" placeholder="Description (optional)" style="flex:2;min-width:160px;" />
+        <button style="background:#1976d2;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;">Add Epoch</button>
+      </form>
+    </details>
+    <details id="visits-section" open class="collapsible">
+      <summary>Visits ({{ visits|length }}) <span class="hint">(drag to reorder)</span></summary>
+      <ul id="visits-list" class="drag-list">
+        {% for v in visits %}
+        <li class="drag-item" draggable="true" data-id="{{ v.id }}"><span class="ord">{{ v.order_index }}</span>. {{ v.name }} ({{ v.raw_header }})
+          {% if epochs %}
+          <form method="post" action="/ui/soa/{{ soa_id }}/set_visit_epoch" style="display:inline;margin-left:6px;">
+            <input type="hidden" name="visit_id" value="{{ v.id }}" />
+            <select name="epoch_id" style="font-size:0.65em;" onchange="this.form.submit()">
+              <option value="" {% if not v.epoch_id %}selected{% endif %}>[no epoch]</option>
+              {% for e in epochs %}
+                <option value="{{ e.id }}" {% if v.epoch_id == e.id %}selected{% endif %}>E{{ e.epoch_seq }} {{ e.name }}{% if e.epoch_label %} - {{ e.epoch_label }}{% endif %}</option>
+              {% endfor %}
+            </select>
+          </form>
+          {% endif %}
+          <form hx-post="/ui/soa/{{ soa_id }}/delete_visit" hx-confirm="Delete visit '{{ v.name }}' and its cells?" style="display:inline">
+            <input type="hidden" name="visit_id" value="{{ v.id }}" />
+            <button type="submit" class="delete-btn">✕</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/ui/soa/{{ soa_id }}/add_visit" style="margin-top:6px;">
+        <input name="name" placeholder="Visit Name" required />
+        <input name="raw_header" placeholder="Label (optional)" />
+        {% if epochs %}
+          <select name="epoch_id" style="font-size:0.7em;">
+            <option value="">Epoch (optional)</option>
+            {% for e in epochs %}<option value="{{ e.id }}">E{{ e.epoch_seq }} {{ e.name }}{% if e.epoch_label %} - {{ e.epoch_label }}{% endif %}</option>{% endfor %}
+          </select>
+        {% endif %}
+        <button>Add Visit</button>
+      </form>
+    </details>
   </div>
   <div>
-    <h3>Activities</h3>
-    <ul>
-      {% for a in activities %}
-      <li>{{ a.order_index }}. {{ a.name }}
-        <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
-          <input type="hidden" name="activity_id" value="{{ a.id }}" />
-          <button type="submit" class="delete-btn">✕</button>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
-    <form method="post" action="/ui/soa/{{ soa_id }}/add_activity">
-      <input name="name" placeholder="Activity Name" required />
-      <button>Add Activity</button>
-    </form>
+    <details id="activities-section" open class="collapsible">
+      <summary>Activities ({{ activities|length }}) <span class="hint">(drag to reorder)</span></summary>
+      <ul id="activities-list" class="drag-list">
+        {% for a in activities %}
+        <li class="drag-item" draggable="true" data-id="{{ a.id }}"><span class="ord">{{ a.order_index }}</span>. {{ a.name }}
+          <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
+            <input type="hidden" name="activity_id" value="{{ a.id }}" />
+            <button type="submit" class="delete-btn">✕</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/ui/soa/{{ soa_id }}/add_activity" style="margin-top:6px;">
+        <input name="name" placeholder="Activity Name" required />
+        <button>Add Activity</button>
+      </form>
+    </details>
   </div>
 </div>
 <hr />
@@ -99,10 +172,19 @@
   <tr>
     <th>Activity</th>
     <th>Concepts</th>
-    {% for v in visits %}<th>{{ v.name }}</th>{% endfor %}
+    {% for v in visits %}
+      <th style="min-width:70px;" data-visit-id="{{ v.id }}">
+        <div>{{ v.name }}</div>
+        <div style="font-size:0.65em;color:#555;line-height:1.1;">{{ v.raw_header or v.name }}</div>
+        {% if v.epoch_id %}
+          {% set ep = (epochs | selectattr('id','equalto', v.epoch_id) | list) %}
+          {% if ep and ep[0] %}<div style="font-size:0.6em;color:#2e7d32;line-height:1.1;">Epoch: {{ ep[0].name }}</div>{% endif %}
+        {% endif %}
+      </th>
+    {% endfor %}
   </tr>
   {% for a in activities %}
-  <tr>
+  <tr data-activity-id="{{ a.id }}">
     <td>{{ a.name }}</td>
   {% set concepts_list = activity_concepts.get(a.id, []) %}
   {% set selected_list = concepts_list %}
@@ -112,7 +194,7 @@
     {% for v in visits %}
       {% set raw_status = cell_map.get((v.id, a.id), '') %}
       {% set display = 'X' if raw_status == 'X' else '' %}
-      <td hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
+      <td data-visit-id="{{ v.id }}" hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
     {% endfor %}
   </tr>
   {% endfor %}
@@ -130,8 +212,114 @@
   .small-btn { background:#2e7d32; color:#fff; border:none; padding:2px 8px; margin-top:4px; cursor:pointer; font-size:0.75em; }
   .small-btn:hover { background:#1b5e20; }
   /* Removed per-activity concept editor styles */
+  details.collapsible { border:1px solid #ddd; padding:6px 8px; border-radius:4px; background:#fafafa; }
+  details.collapsible summary { cursor:pointer; font-weight:600; }
+  details.collapsible[open] { background:#fdfdfd; }
+  .drag-list { list-style:none; margin:0; padding:0; }
+  .drag-item { padding:3px 4px; margin:2px 0; background:#fff; border:1px solid #e0e0e0; border-radius:3px; cursor:grab; display:flex; align-items:center; gap:4px; }
+  .drag-item.dragging { opacity:0.5; }
+  .drag-item.over { border-color:#1976d2; background:#e3f2fd; }
+  .drag-item form { margin-left:auto; }
+  .hint { font-weight:400; font-size:0.7em; color:#666; }
 </style>
 <script>
+// --- Collapse state persistence ---
+function persistSection(sectionId){
+  const el = document.getElementById(sectionId);
+  if(!el) return;
+  el.addEventListener('toggle', ()=>{
+    localStorage.setItem('soa_collapse_'+sectionId, el.open ? '1':'0');
+  });
+  const saved = localStorage.getItem('soa_collapse_'+sectionId);
+  if(saved === '0') el.open = false;
+}
+persistSection('visits-section');
+persistSection('activities-section');
+persistSection('epochs-section');
+
+// --- Drag & drop reorder utility ---
+function enableDragList(listId, submitUrl, ordSelector='.ord', kind=null){
+  const list = document.getElementById(listId);
+  if(!list) return;
+  let dragEl=null;
+  list.addEventListener('dragstart', e=>{
+    const li = e.target.closest('.drag-item');
+    if(!li) return;
+    dragEl = li;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+  });
+  list.addEventListener('dragend', e=>{
+    if(dragEl){ dragEl.classList.remove('dragging'); dragEl=null; updateOrder(); }
+  });
+  list.addEventListener('dragover', e=>{
+    e.preventDefault();
+    const after = getDragAfterElement(list, e.clientY);
+    const dragging = list.querySelector('.drag-item.dragging');
+    if(!dragging) return;
+    if(after == null){ list.appendChild(dragging); }
+    else { list.insertBefore(dragging, after); }
+  });
+  function getDragAfterElement(container, y){
+    const els = [...container.querySelectorAll('.drag-item:not(.dragging)')];
+    return els.reduce((closest, child)=>{
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height/2;
+      if(offset < 0 && offset > closest.offset){
+        return {offset: offset, element: child};
+      } else { return closest; }
+    }, {offset: Number.NEGATIVE_INFINITY}).element;
+  }
+  function updateOrder(){
+    const ids = [...list.querySelectorAll('.drag-item')].map(li=>li.dataset.id);
+    // Update displayed ordinal
+    [...list.querySelectorAll('.drag-item')].forEach((li,i)=>{
+      const ord = li.querySelector(ordSelector); if(ord) ord.textContent = i+1; });
+    fetch(submitUrl, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({order: ids.join(',')})})
+      .then(r=>{ if(!r.ok){ console.warn('Reorder failed'); } else {
+          if(kind==='visit'){ reorderMatrixVisits(ids.map(x=>parseInt(x))); }
+          if(kind==='activity'){ reorderMatrixActivities(ids.map(x=>parseInt(x))); }
+        }}).catch(err=>console.error(err));
+  }
+}
+enableDragList('epochs-list', '/ui/soa/{{ soa_id }}/reorder_epochs', '.ord', 'epoch');
+enableDragList('visits-list', '/ui/soa/{{ soa_id }}/reorder_visits', '.ord', 'visit');
+enableDragList('activities-list', '/ui/soa/{{ soa_id }}/reorder_activities', '.ord', 'activity');
+// NOTE: kind === 'epoch' intentionally has no corresponding reorderMatrixEpochs call.
+// Epochs are a higher-level grouping that does not alter matrix axes (columns are visits, rows are activities).
+// We still record reorder audit events for epochs, but no DOM matrix reflow is required.
+
+function reorderMatrixVisits(newOrder){
+  const table = document.querySelector('table.matrix'); if(!table) return;
+  const headerRow = table.querySelector('tr'); if(!headerRow) return;
+  const fixedCols = 2; // Activity + Concepts
+  // Collect existing visit headers
+  const visitHeaders = Array.from(headerRow.querySelectorAll('th[data-visit-id]'));
+  const headerMap = {}; visitHeaders.forEach(th=>headerMap[parseInt(th.dataset.visitId)]=th);
+  // Append in new order after fixed columns
+  visitHeaders.forEach(th=>th.remove());
+  newOrder.forEach(id=>{
+    const th = headerMap[id]; if(th) headerRow.appendChild(th);
+  });
+  // Reorder each activity row's cells
+  const bodyRows = Array.from(table.querySelectorAll('tr[data-activity-id]'));
+  bodyRows.forEach(tr=>{
+    const cells = Array.from(tr.querySelectorAll('td[data-visit-id]'));
+    const cellMap = {}; cells.forEach(td=>cellMap[parseInt(td.dataset.visitId)]=td);
+    cells.forEach(td=>td.remove());
+    newOrder.forEach(id=>{ const td = cellMap[id]; if(td) tr.appendChild(td); });
+  });
+}
+
+function reorderMatrixActivities(newOrder){
+  const table = document.querySelector('table.matrix'); if(!table) return;
+  const rows = Array.from(table.querySelectorAll('tr[data-activity-id]'));
+  const map = {}; rows.forEach(r=>map[parseInt(r.dataset.activityId)]=r);
+  // Insert rows in order after header
+  const header = table.querySelector('tr');
+  newOrder.forEach(id=>{ const row = map[id]; if(row) table.appendChild(row); });
+}
+
 function refreshConcepts(){
   fetch('/ui/soa/{{ soa_id }}/concepts_refresh', {method:'POST'})
     .then(()=>window.location='/ui/soa/{{ soa_id }}/edit');
