@@ -114,6 +114,44 @@ def _init_db():
 
 _init_db()
 
+# --------------------- Migrations: add study metadata columns ---------------------
+
+def _migrate_add_study_fields():
+    """Ensure study metadata columns (study_id, study_label, study_description) exist on soa table.
+    Safe to run repeatedly; SQLite ADD COLUMN is idempotent when guarded by schema inspection."""
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(soa)")
+        existing = {r[1] for r in cur.fetchall()}  # column names
+        alters = []
+        if "study_id" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_id TEXT")
+        if "study_label" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_label TEXT")
+        if "study_description" not in existing:
+            alters.append("ALTER TABLE soa ADD COLUMN study_description TEXT")
+        for stmt in alters:
+            try:
+                cur.execute(stmt)
+            except Exception as e:  # pragma: no cover - defensive; should not fail normally
+                logger.warning("Failed executing migration statement '%s': %s", stmt, e)
+        if alters:
+            conn.commit()
+        # Create unique index on study_id (NULLs allowed multiple times by SQLite)
+        try:
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_soa_study_id ON soa(study_id)")
+            conn.commit()
+        except Exception as e:  # pragma: no cover
+            logger.warning("Failed creating unique index idx_soa_study_id: %s", e)
+        conn.close()
+        if alters:
+            logger.info("Applied study field migrations: %s", ", ".join(alters))
+    except Exception as e:  # pragma: no cover
+        logger.warning("Study field migration failed: %s", e)
+
+_migrate_add_study_fields()
+
 # --------------------- Migrations ---------------------
 
 
@@ -148,6 +186,14 @@ _drop_unused_override_table()
 
 class SOACreate(BaseModel):
     name: str
+    study_id: Optional[str] = None
+    study_label: Optional[str] = None
+    study_description: Optional[str] = None
+
+class SOAMetadataUpdate(BaseModel):
+    study_id: Optional[str] = None
+    study_label: Optional[str] = None
+    study_description: Optional[str] = None
 
 
 class VisitCreate(BaseModel):
@@ -221,9 +267,12 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     if version_label in existing_labels:
         raise HTTPException(400, "Version label already exists for this SOA")
     # Gather snapshot data
-    cur.execute("SELECT name, created_at FROM soa WHERE id=?", (soa_id,))
+    cur.execute("SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
     row = cur.fetchone()
     soa_name = row[0] if row else f"SOA {soa_id}"
+    study_id_val = row[2] if row else None
+    study_label_val = row[3] if row else None
+    study_description_val = row[4] if row else None
     visits, activities, cells = _fetch_matrix(soa_id)
     # Concept mapping
     activity_ids = [a["id"] for a in activities]
@@ -239,6 +288,9 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     snapshot = {
         "soa_id": soa_id,
         "soa_name": soa_name,
+        "study_id": study_id_val,
+        "study_label": study_label_val,
+        "study_description": study_description_val,
         "version_label": version_label,
         "frozen_at": datetime.now(timezone.utc).isoformat(),
         "visits": visits,
@@ -1033,14 +1085,32 @@ def _matrix_arrays(soa_id: int):
 def create_soa(payload: SOACreate):
     conn = _connect()
     cur = conn.cursor()
+    # Enforce unique study_id if provided
+    if payload.study_id and payload.study_id.strip():
+        cur.execute("SELECT 1 FROM soa WHERE study_id=?", (payload.study_id.strip(),))
+        if cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "study_id already exists")
     cur.execute(
-        "INSERT INTO soa (name, created_at) VALUES (?, ?)",
-        (payload.name, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO soa (name, created_at, study_id, study_label, study_description) VALUES (?,?,?,?,?)",
+        (
+            payload.name,
+            datetime.now(timezone.utc).isoformat(),
+            (payload.study_id or "").strip() or None,
+            (payload.study_label or "").strip() or None,
+            (payload.study_description or "").strip() or None,
+        ),
     )
     soa_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": soa_id, "name": payload.name}
+    return {
+        "id": soa_id,
+        "name": payload.name,
+        "study_id": payload.study_id,
+        "study_label": payload.study_label,
+        "study_description": payload.study_description,
+    }
 
 
 @app.get("/soa/{soa_id}")
@@ -1048,7 +1118,66 @@ def get_soa(soa_id: int):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
     visits, activities, cells = _fetch_matrix(soa_id)
-    return {"id": soa_id, "visits": visits, "activities": activities, "cells": cells}
+    # Also include study metadata if present
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
+    meta_row = cur.fetchone()
+    conn.close()
+    study_meta = (
+        {
+            "study_id": meta_row[0],
+            "study_label": meta_row[1],
+            "study_description": meta_row[2],
+        }
+        if meta_row
+        else {}
+    )
+    return {
+        "id": soa_id,
+        **study_meta,
+        "visits": visits,
+        "activities": activities,
+        "cells": cells,
+    }
+
+@app.post("/soa/{soa_id}/metadata")
+def update_soa_metadata(soa_id: int, payload: SOAMetadataUpdate):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    # Fetch current study_id to enforce non-blank persistence
+    cur.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row = cur.fetchone()
+    current_study_id = row[0] if row else None
+    proposed = (payload.study_id or "").strip()
+    if proposed == "" and current_study_id:
+        # Ignore clearing attempt – keep existing value
+        new_study_id = current_study_id
+    else:
+        new_study_id = proposed or None
+    if new_study_id:
+        cur.execute("SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id))
+        if cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "study_id already exists")
+    # If there was no previous study_id and none provided now, reject
+    if not current_study_id and not new_study_id:
+        conn.close()
+        raise HTTPException(400, "study_id is required and cannot be blank")
+    cur.execute(
+        "UPDATE soa SET study_id=?, study_label=?, study_description=? WHERE id=?",
+        (
+            new_study_id,
+            (payload.study_label or "").strip() or None,
+            (payload.study_description or "").strip() or None,
+            soa_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": soa_id, "updated": True}
 
 
 @app.post("/soa/{soa_id}/visits")
@@ -1358,6 +1487,53 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
             ]
         )
     bio = io.BytesIO()
+    # Prepare cover sheet metadata
+    # Fetch study core metadata (name, study fields, created_at)
+    conn_info = _connect()
+    cur_info = conn_info.cursor()
+    cur_info.execute(
+        "SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?",
+        (soa_id,)
+    )
+    info_row = cur_info.fetchone()
+    conn_info.close()
+    if info_row:
+        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = info_row
+    else:
+        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = (
+            f"SOA {soa_id}", None, None, None, None
+        )
+    freezes = _list_freezes(soa_id)
+    last_freeze_label = freezes[0]["version_label"] if freezes else None
+    last_freeze_time = freezes[0]["created_at"] if freezes else None
+    left_freeze = _get_freeze(soa_id, left) if left else None
+    right_freeze = _get_freeze(soa_id, right) if right else None
+    concept_mapping_count = len(mapping_rows)
+    cell_count = len(cells)
+    meta_rows = [
+        ["Study ID", study_id_val or ""],
+        ["Study Name", soa_name_val],
+        ["Study Label", study_label_val or ""],
+        ["Study Description", (study_desc_val or "")[:4000]],
+        ["Created At", created_at_val or ""],
+        ["Visit Count", str(len(visits))],
+        ["Activity Count", str(len(activities))],
+        ["Cell Count", str(cell_count)],
+        ["Concept Mapping Count", str(concept_mapping_count)],
+        ["Frozen Versions Count", str(len(freezes))],
+        ["Latest Freeze Label", last_freeze_label or ""],
+        ["Latest Freeze Time", last_freeze_time or ""],
+    ]
+    if left_freeze and right_freeze:
+        meta_rows.extend(
+            [
+                ["Diff Left Label", left_freeze.get("version_label")],
+                ["Diff Left Frozen At", left_freeze.get("created_at")],
+                ["Diff Right Label", right_freeze.get("version_label")],
+                ["Diff Right Frozen At", right_freeze.get("created_at")],
+            ]
+        )
+    study_df = pd.DataFrame(meta_rows, columns=["Key", "Value"])
     # Optional concept diff sheet if left/right provided
     concept_diff_df = None
     if left and right:
@@ -1411,13 +1587,41 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
             # Provide an error sheet to highlight issue rather than failing entire export
             concept_diff_df = pd.DataFrame([[str(e)]], columns=["ConceptDiffError"])
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        study_df.to_excel(writer, index=False, sheet_name="Study")
         df.to_excel(writer, index=False, sheet_name="SoA")
         mapping_df.to_excel(writer, index=False, sheet_name="ConceptMappings")
         audit_df.to_excel(writer, index=False, sheet_name="RollbackAudit")
         if concept_diff_df is not None:
             concept_diff_df.to_excel(writer, index=False, sheet_name="ConceptDiff")
     bio.seek(0)
-    filename = f"soa_{soa_id}_matrix.xlsx"
+    # Dynamic filename pattern: studyid_version.xlsx
+    # Determine study_id and version context
+    conn_meta = _connect()
+    cur_meta = conn_meta.cursor()
+    cur_meta.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row_meta = cur_meta.fetchone()
+    conn_meta.close()
+    study_id_val = (row_meta[0] if row_meta else None) or f"soa{soa_id}"
+    # Sanitize study_id for filename (keep alnum, '-', '_')
+    import re as _re
+    safe_study = _re.sub(r"[^A-Za-z0-9_-]+", "-", study_id_val.strip())[:80] or f"soa{soa_id}"
+    version_segment = ""
+    if left and right:
+        # Diff export: include both labels
+        left_f = _get_freeze(soa_id, left)
+        right_f = _get_freeze(soa_id, right)
+        left_label = left_f.get("version_label") if left_f else f"v{left}"
+        right_label = right_f.get("version_label") if right_f else f"v{right}"
+        version_segment = f"{left_label}_vs_{right_label}"
+    else:
+        freezes = _list_freezes(soa_id)
+        if freezes:
+            version_segment = freezes[0]["version_label"] or f"v{freezes[0]['id']}"
+        else:
+            # No freezes yet: assume initial version number 1
+            version_segment = "v1"
+    safe_version = _re.sub(r"[^A-Za-z0-9._-]+", "-", version_segment)[:60]
+    filename = f"{safe_study}_{safe_version}.xlsx"
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1571,30 +1775,101 @@ def delete_activity(soa_id: int, activity_id: int):
 def ui_index(request: Request):
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT id,name,created_at FROM soa ORDER BY id DESC")
+    cur.execute(
+        "SELECT id,name,created_at,study_id,study_label,study_description FROM soa ORDER BY id DESC"
+    )
     rows = cur.fetchall()
     conn.close()
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "soas": [{"id": r[0], "name": r[1], "created_at": r[2]} for r in rows],
+            "soas": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "created_at": r[2],
+                    "study_id": r[3],
+                    "study_label": r[4],
+                    "study_description": r[5],
+                }
+                for r in rows
+            ],
         },
     )
 
 
 @app.post("/ui/soa/create", response_class=HTMLResponse)
-def ui_create_soa(request: Request, name: str = Form(...)):
+def ui_create_soa(
+    request: Request,
+    name: str = Form(...),
+    study_id: Optional[str] = Form(None),
+    study_label: Optional[str] = Form(None),
+    study_description: Optional[str] = Form(None),
+):
     conn = _connect()
     cur = conn.cursor()
+    # Uniqueness check
+    if study_id and study_id.strip():
+        cur.execute("SELECT 1 FROM soa WHERE study_id=?", (study_id.strip(),))
+        if cur.fetchone():
+            conn.close()
+            return HTMLResponse("<script>alert('study_id already exists');window.location='/'</script>")
     cur.execute(
-        "INSERT INTO soa (name, created_at) VALUES (?,?)",
-        (name, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO soa (name, created_at, study_id, study_label, study_description) VALUES (?,?,?,?,?)",
+        (
+            name,
+            datetime.now(timezone.utc).isoformat(),
+            (study_id or "").strip() or None,
+            (study_label or "").strip() or None,
+            (study_description or "").strip() or None,
+        ),
     )
     sid = cur.lastrowid
     conn.commit()
     conn.close()
     return HTMLResponse(f"<script>window.location='/ui/soa/{sid}/edit';</script>")
+
+@app.post("/ui/soa/{soa_id}/update_meta", response_class=HTMLResponse)
+def ui_update_meta(
+    request: Request,
+    soa_id: int,
+    study_id: Optional[str] = Form(None),
+    study_label: Optional[str] = Form(None),
+    study_description: Optional[str] = Form(None),
+):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT study_id FROM soa WHERE id=?", (soa_id,))
+    row = cur.fetchone()
+    current_study_id = row[0] if row else None
+    proposed = (study_id or "").strip()
+    if proposed == "" and current_study_id:
+        new_study_id = current_study_id  # preserve existing
+    else:
+        new_study_id = proposed or None
+    if new_study_id:
+        cur.execute("SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id))
+        if cur.fetchone():
+            conn.close()
+            return HTMLResponse("<script>alert('study_id already exists');window.location='/ui/soa/%d/edit';</script>" % soa_id)
+    if not current_study_id and not new_study_id:
+        conn.close()
+        return HTMLResponse("<script>alert('study_id is required');window.location='/ui/soa/%d/edit';</script>" % soa_id)
+    cur.execute(
+        "UPDATE soa SET study_id=?, study_label=?, study_description=? WHERE id=?",
+        (
+            new_study_id,
+            (study_label or "").strip() or None,
+            (study_description or "").strip() or None,
+            soa_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
 @app.get("/ui/soa/{soa_id}/edit", response_class=HTMLResponse)
@@ -1645,6 +1920,17 @@ def ui_edit(request: Request, soa_id: int):
             last_fetch_relative = f"{secs//3600}h ago"
     freeze_list = _list_freezes(soa_id)
     last_frozen_at = freeze_list[0]["created_at"] if freeze_list else None
+    # Study metadata for edit form
+    conn_meta = _connect()
+    cur_meta = conn_meta.cursor()
+    cur_meta.execute("SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
+    meta_row = cur_meta.fetchone()
+    conn_meta.close()
+    study_meta = {
+        "study_id": meta_row[0] if meta_row else None,
+        "study_label": meta_row[1] if meta_row else None,
+        "study_description": meta_row[2] if meta_row else None,
+    }
     return templates.TemplateResponse(
         "edit.html",
         {
@@ -1662,6 +1948,7 @@ def ui_edit(request: Request, soa_id: int):
             "freezes": freeze_list,
             "freeze_count": len(freeze_list),
             "last_frozen_at": last_frozen_at,
+            **study_meta,
         },
     )
 

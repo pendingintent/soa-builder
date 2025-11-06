@@ -1,6 +1,27 @@
 {% extends 'base.html' %}
 {% block content %}
 <h2>Editing SoA {{ soa_id }}</h2>
+<div class="study-meta" style="background:#f5f5f5;padding:8px 10px;border:1px solid #ddd;border-radius:4px;margin-bottom:12px;font-size:0.8em;">
+  <strong>Study Metadata</strong>
+  <form method="post" action="/ui/soa/{{ soa_id }}/update_meta" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px;align-items:start;">
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <label for="study_id">Study ID *</label>
+      <input id="study_id" name="study_id" value="{{ study_id or '' }}" placeholder="Unique Study ID" required />
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;">
+      <label for="study_label">Label</label>
+      <input id="study_label" name="study_label" value="{{ study_label or '' }}" placeholder="Short Label" />
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;grid-column:1/-1;">
+      <label for="study_description">Description</label>
+      <textarea id="study_description" name="study_description" rows="3" placeholder="Study Description">{{ study_description or '' }}</textarea>
+    </div>
+    <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button type="submit" style="background:#1976d2;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;">Update Metadata</button>
+      <small style="color:#555;">Study ID must be unique and cannot be cleared once set. Other fields may be left blank to clear.</small>
+    </div>
+  </form>
+</div>
 <div class="freeze-bar" style="margin-bottom:12px;display:flex;flex-direction:column;gap:6px;">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <form hx-post="/ui/soa/{{ soa_id }}/freeze" hx-target="#freeze-feedback" hx-swap="innerHTML" style="display:flex;align-items:center;gap:4px;">
@@ -71,7 +92,7 @@
     </ul>
     <form method="post" action="/ui/soa/{{ soa_id }}/add_visit">
       <input name="name" placeholder="Visit Name" required />
-      <input name="raw_header" placeholder="Raw Header (optional)" />
+      <input name="raw_header" placeholder="Label  (optional)" />
       <button>Add Visit</button>
     </form>
   </div>
