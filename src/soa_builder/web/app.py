@@ -127,9 +127,11 @@ _init_db()
 
 # --------------------- Migrations: add study metadata columns ---------------------
 
+
 def _migrate_add_study_fields():
     """Ensure study metadata columns (study_id, study_label, study_description) exist on soa table.
-    Safe to run repeatedly; SQLite ADD COLUMN is idempotent when guarded by schema inspection."""
+    Safe to run repeatedly; SQLite ADD COLUMN is idempotent when guarded by schema inspection.
+    """
     try:
         conn = _connect()
         cur = conn.cursor()
@@ -145,13 +147,17 @@ def _migrate_add_study_fields():
         for stmt in alters:
             try:
                 cur.execute(stmt)
-            except Exception as e:  # pragma: no cover - defensive; should not fail normally
+            except (
+                Exception
+            ) as e:  # pragma: no cover - defensive; should not fail normally
                 logger.warning("Failed executing migration statement '%s': %s", stmt, e)
         if alters:
             conn.commit()
         # Create unique index on study_id (NULLs allowed multiple times by SQLite)
         try:
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_soa_study_id ON soa(study_id)")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_soa_study_id ON soa(study_id)"
+            )
             conn.commit()
         except Exception as e:  # pragma: no cover
             logger.warning("Failed creating unique index idx_soa_study_id: %s", e)
@@ -160,6 +166,7 @@ def _migrate_add_study_fields():
             logger.info("Applied study field migrations: %s", ", ".join(alters))
     except Exception as e:  # pragma: no cover
         logger.warning("Study field migration failed: %s", e)
+
 
 _migrate_add_study_fields()
 
@@ -200,6 +207,7 @@ class SOACreate(BaseModel):
     study_id: Optional[str] = None
     study_label: Optional[str] = None
     study_description: Optional[str] = None
+
 
 class SOAMetadataUpdate(BaseModel):
     study_id: Optional[str] = None
@@ -278,7 +286,10 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     if version_label in existing_labels:
         raise HTTPException(400, "Version label already exists for this SOA")
     # Gather snapshot data
-    cur.execute("SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
+    cur.execute(
+        "SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?",
+        (soa_id,),
+    )
     row = cur.fetchone()
     soa_name = row[0] if row else f"SOA {soa_id}"
     study_id_val = row[2] if row else None
@@ -594,7 +605,10 @@ def _record_rollback_audit(soa_id: int, freeze_id: int, stats: dict):
     conn.commit()
     conn.close()
 
-def _record_reorder_audit(soa_id: int, entity_type: str, old_order: list[int], new_order: list[int]):
+
+def _record_reorder_audit(
+    soa_id: int, entity_type: str, old_order: list[int], new_order: list[int]
+):
     """Persist a reorder audit record if ordering truly changed.
 
     Parameters:
@@ -620,8 +634,11 @@ def _record_reorder_audit(soa_id: int, entity_type: str, old_order: list[int], n
         )
         conn.commit()
         conn.close()
-    except Exception as e:  # pragma: no cover - audit failure should not break core flow
+    except (
+        Exception
+    ) as e:  # pragma: no cover - audit failure should not break core flow
         logger.warning("Failed to record reorder audit: %s", e)
+
 
 def _list_reorder_audit(soa_id: int) -> list[dict]:
     conn = _connect()
@@ -1027,6 +1044,7 @@ def get_rollback_audit_json(soa_id: int):
         raise HTTPException(404, "SOA not found")
     return {"audit": _list_rollback_audit(soa_id)}
 
+
 @app.get("/soa/{soa_id}/reorder_audit")
 def get_reorder_audit_json(soa_id: int):
     if not _soa_exists(soa_id):
@@ -1042,6 +1060,7 @@ def ui_rollback_audit(request: Request, soa_id: int):
         "rollback_audit_modal.html",
         {"request": request, "soa_id": soa_id, "audit": _list_rollback_audit(soa_id)},
     )
+
 
 @app.get("/ui/soa/{soa_id}/reorder_audit", response_class=HTMLResponse)
 def ui_reorder_audit(request: Request, soa_id: int):
@@ -1085,6 +1104,7 @@ def export_rollback_audit_xlsx(soa_id: int):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
 @app.get("/soa/{soa_id}/reorder_audit/export/xlsx")
 def export_reorder_audit_xlsx(soa_id: int):
     """Export reorder audit history (visit/activity reorders) to Excel."""
@@ -1114,7 +1134,14 @@ def export_reorder_audit_xlsx(soa_id: int):
     df = pd.DataFrame(flat_rows)
     if df.empty:
         df = pd.DataFrame(
-            columns=["id", "entity_type", "performed_at", "old_order", "new_order", "moves"]
+            columns=[
+                "id",
+                "entity_type",
+                "performed_at",
+                "old_order",
+                "new_order",
+                "moves",
+            ]
         )
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
@@ -1126,6 +1153,7 @@ def export_reorder_audit_xlsx(soa_id: int):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
 
 @app.get("/soa/{soa_id}/reorder_audit/export/csv")
 def export_reorder_audit_csv(soa_id: int):
@@ -1276,7 +1304,9 @@ def get_soa(soa_id: int):
     # Also include study metadata if present
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
+    cur.execute(
+        "SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,)
+    )
     meta_row = cur.fetchone()
     conn.close()
     study_meta = (
@@ -1296,6 +1326,7 @@ def get_soa(soa_id: int):
         "cells": cells,
     }
 
+
 @app.post("/soa/{soa_id}/metadata")
 def update_soa_metadata(soa_id: int, payload: SOAMetadataUpdate):
     if not _soa_exists(soa_id):
@@ -1313,7 +1344,9 @@ def update_soa_metadata(soa_id: int, payload: SOAMetadataUpdate):
     else:
         new_study_id = proposed or None
     if new_study_id:
-        cur.execute("SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id))
+        cur.execute(
+            "SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id)
+        )
         if cur.fetchone():
             conn.close()
             raise HTTPException(400, "study_id already exists")
@@ -1648,15 +1681,21 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
     cur_info = conn_info.cursor()
     cur_info.execute(
         "SELECT name, created_at, study_id, study_label, study_description FROM soa WHERE id=?",
-        (soa_id,)
+        (soa_id,),
     )
     info_row = cur_info.fetchone()
     conn_info.close()
     if info_row:
-        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = info_row
+        soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = (
+            info_row
+        )
     else:
         soa_name_val, created_at_val, study_id_val, study_label_val, study_desc_val = (
-            f"SOA {soa_id}", None, None, None, None
+            f"SOA {soa_id}",
+            None,
+            None,
+            None,
+            None,
         )
     freezes = _list_freezes(soa_id)
     last_freeze_label = freezes[0]["version_label"] if freezes else None
@@ -1759,7 +1798,10 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
     study_id_val = (row_meta[0] if row_meta else None) or f"soa{soa_id}"
     # Sanitize study_id for filename (keep alnum, '-', '_')
     import re as _re
-    safe_study = _re.sub(r"[^A-Za-z0-9_-]+", "-", study_id_val.strip())[:80] or f"soa{soa_id}"
+
+    safe_study = (
+        _re.sub(r"[^A-Za-z0-9_-]+", "-", study_id_val.strip())[:80] or f"soa{soa_id}"
+    )
     version_segment = ""
     if left and right:
         # Diff export: include both labels
@@ -1969,7 +2011,9 @@ def ui_create_soa(
         cur.execute("SELECT 1 FROM soa WHERE study_id=?", (study_id.strip(),))
         if cur.fetchone():
             conn.close()
-            return HTMLResponse("<script>alert('study_id already exists');window.location='/'</script>")
+            return HTMLResponse(
+                "<script>alert('study_id already exists');window.location='/'</script>"
+            )
     cur.execute(
         "INSERT INTO soa (name, created_at, study_id, study_label, study_description) VALUES (?,?,?,?,?)",
         (
@@ -1984,6 +2028,7 @@ def ui_create_soa(
     conn.commit()
     conn.close()
     return HTMLResponse(f"<script>window.location='/ui/soa/{sid}/edit';</script>")
+
 
 @app.post("/ui/soa/{soa_id}/update_meta", response_class=HTMLResponse)
 def ui_update_meta(
@@ -2006,13 +2051,21 @@ def ui_update_meta(
     else:
         new_study_id = proposed or None
     if new_study_id:
-        cur.execute("SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id))
+        cur.execute(
+            "SELECT id FROM soa WHERE study_id=? AND id<>?", (new_study_id, soa_id)
+        )
         if cur.fetchone():
             conn.close()
-            return HTMLResponse("<script>alert('study_id already exists');window.location='/ui/soa/%d/edit';</script>" % soa_id)
+            return HTMLResponse(
+                "<script>alert('study_id already exists');window.location='/ui/soa/%d/edit';</script>"
+                % soa_id
+            )
     if not current_study_id and not new_study_id:
         conn.close()
-        return HTMLResponse("<script>alert('study_id is required');window.location='/ui/soa/%d/edit';</script>" % soa_id)
+        return HTMLResponse(
+            "<script>alert('study_id is required');window.location='/ui/soa/%d/edit';</script>"
+            % soa_id
+        )
     cur.execute(
         "UPDATE soa SET study_id=?, study_label=?, study_description=? WHERE id=?",
         (
@@ -2078,7 +2131,9 @@ def ui_edit(request: Request, soa_id: int):
     # Study metadata for edit form
     conn_meta = _connect()
     cur_meta = conn_meta.cursor()
-    cur_meta.execute("SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,))
+    cur_meta.execute(
+        "SELECT study_id, study_label, study_description FROM soa WHERE id=?", (soa_id,)
+    )
     meta_row = cur_meta.fetchone()
     conn_meta.close()
     study_meta = {
@@ -2302,7 +2357,9 @@ def ui_reorder_activities(request: Request, soa_id: int, order: str = Form("")):
     conn = _connect()
     cur = conn.cursor()
     # Capture previous order
-    cur.execute("SELECT id FROM activity WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    cur.execute(
+        "SELECT id FROM activity WHERE soa_id=? ORDER BY order_index", (soa_id,)
+    )
     old_order = [r[0] for r in cur.fetchall()]
     cur.execute("SELECT id FROM activity WHERE soa_id=?", (soa_id,))
     existing = {r[0] for r in cur.fetchall()}
