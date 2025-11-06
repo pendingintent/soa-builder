@@ -108,6 +108,17 @@ def _init_db():
             concepts_restored INTEGER
         )"""
     )
+    # Reorder audit (tracks manual drag reorder operations for visits & activities)
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS reorder_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            entity_type TEXT NOT NULL, -- 'visit' | 'activity'
+            old_order_json TEXT NOT NULL,
+            new_order_json TEXT NOT NULL,
+            performed_at TEXT NOT NULL
+        )"""
+    )
     conn.commit()
     conn.close()
 
@@ -583,6 +594,55 @@ def _record_rollback_audit(soa_id: int, freeze_id: int, stats: dict):
     conn.commit()
     conn.close()
 
+def _record_reorder_audit(soa_id: int, entity_type: str, old_order: list[int], new_order: list[int]):
+    """Persist a reorder audit record if ordering truly changed.
+
+    Parameters:
+      soa_id: owning SoA id
+      entity_type: 'visit' | 'activity'
+      old_order: list of IDs before reorder (ascending order_index)
+      new_order: list of IDs after reorder (ascending order_index)
+    """
+    try:
+        if old_order == new_order:
+            return  # no change
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO reorder_audit (soa_id, entity_type, old_order_json, new_order_json, performed_at) VALUES (?,?,?,?,?)",
+            (
+                soa_id,
+                entity_type,
+                json.dumps(old_order),
+                json.dumps(new_order),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover - audit failure should not break core flow
+        logger.warning("Failed to record reorder audit: %s", e)
+
+def _list_reorder_audit(soa_id: int) -> list[dict]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, entity_type, old_order_json, new_order_json, performed_at FROM reorder_audit WHERE soa_id=? ORDER BY id DESC",
+        (soa_id,),
+    )
+    rows = [
+        {
+            "id": r[0],
+            "entity_type": r[1],
+            "old_order": json.loads(r[2]) if r[2] else [],
+            "new_order": json.loads(r[3]) if r[3] else [],
+            "performed_at": r[4],
+        }
+        for r in cur.fetchall()
+    ]
+    conn.close()
+    return rows
+
 
 def _list_rollback_audit(soa_id: int) -> list[dict]:
     conn = _connect()
@@ -967,6 +1027,12 @@ def get_rollback_audit_json(soa_id: int):
         raise HTTPException(404, "SOA not found")
     return {"audit": _list_rollback_audit(soa_id)}
 
+@app.get("/soa/{soa_id}/reorder_audit")
+def get_reorder_audit_json(soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return {"audit": _list_reorder_audit(soa_id)}
+
 
 @app.get("/ui/soa/{soa_id}/rollback_audit", response_class=HTMLResponse)
 def ui_rollback_audit(request: Request, soa_id: int):
@@ -975,6 +1041,15 @@ def ui_rollback_audit(request: Request, soa_id: int):
     return templates.TemplateResponse(
         "rollback_audit_modal.html",
         {"request": request, "soa_id": soa_id, "audit": _list_rollback_audit(soa_id)},
+    )
+
+@app.get("/ui/soa/{soa_id}/reorder_audit", response_class=HTMLResponse)
+def ui_reorder_audit(request: Request, soa_id: int):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    return templates.TemplateResponse(
+        "reorder_audit_modal.html",
+        {"request": request, "soa_id": soa_id, "audit": _list_reorder_audit(soa_id)},
     )
 
 
@@ -1007,6 +1082,86 @@ def export_rollback_audit_xlsx(soa_id: int):
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@app.get("/soa/{soa_id}/reorder_audit/export/xlsx")
+def export_reorder_audit_xlsx(soa_id: int):
+    """Export reorder audit history (visit/activity reorders) to Excel."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    rows = _list_reorder_audit(soa_id)
+    # Flatten old/new order arrays to strings for readability
+    flat_rows = []
+    for r in rows:
+        moves = []
+        old_pos = {vid: idx + 1 for idx, vid in enumerate(r.get("old_order", []))}
+        new_order = r.get("new_order", [])
+        for idx, vid in enumerate(new_order, start=1):
+            op = old_pos.get(vid)
+            if op and op != idx:
+                moves.append(f"{vid}:{op}->{idx}")
+        flat_rows.append(
+            {
+                "id": r.get("id"),
+                "entity_type": r.get("entity_type"),
+                "performed_at": r.get("performed_at"),
+                "old_order": ",".join(map(str, r.get("old_order", []))),
+                "new_order": ",".join(map(str, new_order)),
+                "moves": "; ".join(moves) if moves else "",
+            }
+        )
+    df = pd.DataFrame(flat_rows)
+    if df.empty:
+        df = pd.DataFrame(
+            columns=["id", "entity_type", "performed_at", "old_order", "new_order", "moves"]
+        )
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="ReorderAudit")
+    bio.seek(0)
+    filename = f"soa_{soa_id}_reorder_audit.xlsx"
+    return StreamingResponse(
+        bio,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@app.get("/soa/{soa_id}/reorder_audit/export/csv")
+def export_reorder_audit_csv(soa_id: int):
+    """Export reorder audit history to CSV."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    rows = _list_reorder_audit(soa_id)
+    # Prepare CSV lines
+    header = ["id", "entity_type", "performed_at", "old_order", "new_order", "moves"]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(header)
+    for r in rows:
+        old_order = r.get("old_order", [])
+        new_order = r.get("new_order", [])
+        moves = []
+        old_pos = {vid: idx + 1 for idx, vid in enumerate(old_order)}
+        for idx, vid in enumerate(new_order, start=1):
+            op = old_pos.get(vid)
+            if op and op != idx:
+                moves.append(f"{vid}:{op}->{idx}")
+        writer.writerow(
+            [
+                r.get("id"),
+                r.get("entity_type"),
+                r.get("performed_at"),
+                ",".join(map(str, old_order)),
+                ",".join(map(str, new_order)),
+                "; ".join(moves) if moves else "",
+            ]
+        )
+    output.seek(0)
+    filename = f"soa_{soa_id}_reorder_audit.csv"
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -2106,6 +2261,60 @@ def ui_delete_visit(request: Request, soa_id: int, visit_id: int = Form(...)):
 def ui_delete_activity(request: Request, soa_id: int, activity_id: int = Form(...)):
     delete_activity(soa_id, activity_id)
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
+@app.post("/ui/soa/{soa_id}/reorder_visits", response_class=HTMLResponse)
+def ui_reorder_visits(request: Request, soa_id: int, order: str = Form("")):
+    """Persist new visit ordering. 'order' is a comma-separated list of visit IDs in desired order."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    ids = [int(x) for x in order.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse("Invalid order", status_code=400)
+    conn = _connect()
+    cur = conn.cursor()
+    # Capture existing order BEFORE modifications
+    cur.execute("SELECT id FROM visit WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    # Validate membership
+    cur.execute("SELECT id FROM visit WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(ids) - existing:
+        conn.close()
+        return HTMLResponse("Order contains invalid visit id", status_code=400)
+    # Apply new order indices
+    for idx, vid in enumerate(ids, start=1):
+        cur.execute("UPDATE visit SET order_index=? WHERE id=?", (idx, vid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "visit", old_order, ids)
+    return HTMLResponse("OK")
+
+
+@app.post("/ui/soa/{soa_id}/reorder_activities", response_class=HTMLResponse)
+def ui_reorder_activities(request: Request, soa_id: int, order: str = Form("")):
+    """Persist new activity ordering. 'order' is a comma-separated list of activity IDs in desired order."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    ids = [int(x) for x in order.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse("Invalid order", status_code=400)
+    conn = _connect()
+    cur = conn.cursor()
+    # Capture previous order
+    cur.execute("SELECT id FROM activity WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM activity WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(ids) - existing:
+        conn.close()
+        return HTMLResponse("Order contains invalid activity id", status_code=400)
+    for idx, aid in enumerate(ids, start=1):
+        cur.execute("UPDATE activity SET order_index=? WHERE id=?", (idx, aid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "activity", old_order, ids)
+    return HTMLResponse("OK")
 
 
 # --------------------- Entry ---------------------

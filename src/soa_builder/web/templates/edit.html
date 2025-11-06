@@ -46,7 +46,10 @@
     </div>
     <div style="font-size:0.6em;margin-top:4px;">
       <button hx-get="/ui/soa/{{ soa_id }}/rollback_audit" hx-target="#modal-host" hx-swap="innerHTML" style="background:#37474f;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Rollback Audit Log</button>
-      <a href="/soa/{{ soa_id }}/rollback_audit/export/xlsx" style="background:#1976d2;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Export Audit XLSX</a>
+  <button hx-get="/ui/soa/{{ soa_id }}/reorder_audit" hx-target="#modal-host" hx-swap="innerHTML" style="background:#546e7a;color:#fff;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">Reorder Audit Log</button>
+  <a href="/soa/{{ soa_id }}/rollback_audit/export/xlsx" style="background:#1976d2;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Rollback Audit XLSX</a>
+  <a href="/soa/{{ soa_id }}/reorder_audit/export/xlsx" style="background:#00796b;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Reorder Audit XLSX</a>
+  <a href="/soa/{{ soa_id }}/reorder_audit/export/csv" style="background:#00838f;color:#fff;text-decoration:none;padding:3px 8px;border-radius:4px;">Reorder CSV</a>
     </div>
     <div class="freeze-diff" style="font-size:0.65em;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;">
       <strong>Diff:</strong>
@@ -79,39 +82,43 @@
 </div>
 <div class="flex">
   <div>
-    <h3>Visits</h3>
-    <ul>
-      {% for v in visits %}
-      <li>{{ v.order_index }}. {{ v.name }} ({{ v.raw_header }})
-        <form hx-post="/ui/soa/{{ soa_id }}/delete_visit" hx-confirm="Delete visit '{{ v.name }}' and its cells?" style="display:inline">
-          <input type="hidden" name="visit_id" value="{{ v.id }}" />
-          <button type="submit" class="delete-btn">✕</button>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
-    <form method="post" action="/ui/soa/{{ soa_id }}/add_visit">
-      <input name="name" placeholder="Visit Name" required />
-      <input name="raw_header" placeholder="Label  (optional)" />
-      <button>Add Visit</button>
-    </form>
+    <details id="visits-section" open class="collapsible">
+      <summary>Visits ({{ visits|length }}) <span class="hint">(drag to reorder)</span></summary>
+      <ul id="visits-list" class="drag-list">
+        {% for v in visits %}
+        <li class="drag-item" draggable="true" data-id="{{ v.id }}"><span class="ord">{{ v.order_index }}</span>. {{ v.name }} ({{ v.raw_header }})
+          <form hx-post="/ui/soa/{{ soa_id }}/delete_visit" hx-confirm="Delete visit '{{ v.name }}' and its cells?" style="display:inline">
+            <input type="hidden" name="visit_id" value="{{ v.id }}" />
+            <button type="submit" class="delete-btn">✕</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/ui/soa/{{ soa_id }}/add_visit" style="margin-top:6px;">
+        <input name="name" placeholder="Visit Name" required />
+        <input name="raw_header" placeholder="Label (optional)" />
+        <button>Add Visit</button>
+      </form>
+    </details>
   </div>
   <div>
-    <h3>Activities</h3>
-    <ul>
-      {% for a in activities %}
-      <li>{{ a.order_index }}. {{ a.name }}
-        <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
-          <input type="hidden" name="activity_id" value="{{ a.id }}" />
-          <button type="submit" class="delete-btn">✕</button>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
-    <form method="post" action="/ui/soa/{{ soa_id }}/add_activity">
-      <input name="name" placeholder="Activity Name" required />
-      <button>Add Activity</button>
-    </form>
+    <details id="activities-section" open class="collapsible">
+      <summary>Activities ({{ activities|length }}) <span class="hint">(drag to reorder)</span></summary>
+      <ul id="activities-list" class="drag-list">
+        {% for a in activities %}
+        <li class="drag-item" draggable="true" data-id="{{ a.id }}"><span class="ord">{{ a.order_index }}</span>. {{ a.name }}
+          <form hx-post="/ui/soa/{{ soa_id }}/delete_activity" hx-confirm="Delete activity '{{ a.name }}' and its cells?" style="display:inline">
+            <input type="hidden" name="activity_id" value="{{ a.id }}" />
+            <button type="submit" class="delete-btn">✕</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="/ui/soa/{{ soa_id }}/add_activity" style="margin-top:6px;">
+        <input name="name" placeholder="Activity Name" required />
+        <button>Add Activity</button>
+      </form>
+    </details>
   </div>
 </div>
 <hr />
@@ -120,10 +127,15 @@
   <tr>
     <th>Activity</th>
     <th>Concepts</th>
-    {% for v in visits %}<th>{{ v.name }}</th>{% endfor %}
+    {% for v in visits %}
+      <th style="min-width:70px;" data-visit-id="{{ v.id }}">
+        <div>{{ v.name }}</div>
+        <div style="font-size:0.65em;color:#555;line-height:1.1;">{{ v.raw_header or v.name }}</div>
+      </th>
+    {% endfor %}
   </tr>
   {% for a in activities %}
-  <tr>
+  <tr data-activity-id="{{ a.id }}">
     <td>{{ a.name }}</td>
   {% set concepts_list = activity_concepts.get(a.id, []) %}
   {% set selected_list = concepts_list %}
@@ -133,7 +145,7 @@
     {% for v in visits %}
       {% set raw_status = cell_map.get((v.id, a.id), '') %}
       {% set display = 'X' if raw_status == 'X' else '' %}
-      <td hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
+      <td data-visit-id="{{ v.id }}" hx-post="/ui/soa/{{ soa_id }}/toggle_cell" hx-vals='{"visit_id": {{ v.id }}, "activity_id": {{ a.id }} }' hx-swap="outerHTML" class="cell">{{ display }}</td>
     {% endfor %}
   </tr>
   {% endfor %}
@@ -151,8 +163,111 @@
   .small-btn { background:#2e7d32; color:#fff; border:none; padding:2px 8px; margin-top:4px; cursor:pointer; font-size:0.75em; }
   .small-btn:hover { background:#1b5e20; }
   /* Removed per-activity concept editor styles */
+  details.collapsible { border:1px solid #ddd; padding:6px 8px; border-radius:4px; background:#fafafa; }
+  details.collapsible summary { cursor:pointer; font-weight:600; }
+  details.collapsible[open] { background:#fdfdfd; }
+  .drag-list { list-style:none; margin:0; padding:0; }
+  .drag-item { padding:3px 4px; margin:2px 0; background:#fff; border:1px solid #e0e0e0; border-radius:3px; cursor:grab; display:flex; align-items:center; gap:4px; }
+  .drag-item.dragging { opacity:0.5; }
+  .drag-item.over { border-color:#1976d2; background:#e3f2fd; }
+  .drag-item form { margin-left:auto; }
+  .hint { font-weight:400; font-size:0.7em; color:#666; }
 </style>
 <script>
+// --- Collapse state persistence ---
+function persistSection(sectionId){
+  const el = document.getElementById(sectionId);
+  if(!el) return;
+  el.addEventListener('toggle', ()=>{
+    localStorage.setItem('soa_collapse_'+sectionId, el.open ? '1':'0');
+  });
+  const saved = localStorage.getItem('soa_collapse_'+sectionId);
+  if(saved === '0') el.open = false;
+}
+persistSection('visits-section');
+persistSection('activities-section');
+
+// --- Drag & drop reorder utility ---
+function enableDragList(listId, submitUrl, ordSelector='.ord', kind=null){
+  const list = document.getElementById(listId);
+  if(!list) return;
+  let dragEl=null;
+  list.addEventListener('dragstart', e=>{
+    const li = e.target.closest('.drag-item');
+    if(!li) return;
+    dragEl = li;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed='move';
+  });
+  list.addEventListener('dragend', e=>{
+    if(dragEl){ dragEl.classList.remove('dragging'); dragEl=null; updateOrder(); }
+  });
+  list.addEventListener('dragover', e=>{
+    e.preventDefault();
+    const after = getDragAfterElement(list, e.clientY);
+    const dragging = list.querySelector('.drag-item.dragging');
+    if(!dragging) return;
+    if(after == null){ list.appendChild(dragging); }
+    else { list.insertBefore(dragging, after); }
+  });
+  function getDragAfterElement(container, y){
+    const els = [...container.querySelectorAll('.drag-item:not(.dragging)')];
+    return els.reduce((closest, child)=>{
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height/2;
+      if(offset < 0 && offset > closest.offset){
+        return {offset: offset, element: child};
+      } else { return closest; }
+    }, {offset: Number.NEGATIVE_INFINITY}).element;
+  }
+  function updateOrder(){
+    const ids = [...list.querySelectorAll('.drag-item')].map(li=>li.dataset.id);
+    // Update displayed ordinal
+    [...list.querySelectorAll('.drag-item')].forEach((li,i)=>{
+      const ord = li.querySelector(ordSelector); if(ord) ord.textContent = i+1; });
+    fetch(submitUrl, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: 'order='+encodeURIComponent(ids.join(','))})
+      .then(r=>{ if(!r.ok){ console.warn('Reorder failed'); } else {
+          if(kind==='visit'){ reorderMatrixVisits(ids.map(x=>parseInt(x))); }
+          if(kind==='activity'){ reorderMatrixActivities(ids.map(x=>parseInt(x))); }
+        }}).catch(err=>console.error(err));
+  }
+}
+enableDragList('visits-list', '/ui/soa/{{ soa_id }}/reorder_visits', '.ord', 'visit');
+enableDragList('activities-list', '/ui/soa/{{ soa_id }}/reorder_activities', '.ord', 'activity');
+
+function reorderMatrixVisits(newOrder){
+  const table = document.querySelector('table.matrix'); if(!table) return;
+  const headerRow = table.querySelector('tr'); if(!headerRow) return;
+  const fixedCols = 2; // Activity + Concepts
+  // Collect existing visit headers
+  const visitHeaders = Array.from(headerRow.querySelectorAll('th[data-visit-id]'));
+  const headerMap = {}; visitHeaders.forEach(th=>headerMap[parseInt(th.dataset.visitId)]=th);
+  // Append in new order after fixed columns
+  visitHeaders.forEach(th=>th.remove());
+  const beforeInsertRef = headerRow.children[fixedCols-1];
+  newOrder.forEach(id=>{
+    const th = headerMap[id]; if(th) headerRow.appendChild(th);
+  });
+  // Reorder each activity row's cells
+  const bodyRows = Array.from(table.querySelectorAll('tr[data-activity-id]'));
+  bodyRows.forEach(tr=>{
+    const conceptIndex = 2; // After Activity name + Concepts cell already in place
+    const cells = Array.from(tr.querySelectorAll('td[data-visit-id]'));
+    const cellMap = {}; cells.forEach(td=>cellMap[parseInt(td.dataset.visitId)]=td);
+    cells.forEach(td=>td.remove());
+    newOrder.forEach(id=>{ const td = cellMap[id]; if(td) tr.appendChild(td); });
+  });
+}
+
+function reorderMatrixActivities(newOrder){
+  const table = document.querySelector('table.matrix'); if(!table) return;
+  const rows = Array.from(table.querySelectorAll('tr[data-activity-id]'));
+  const map = {}; rows.forEach(r=>map[parseInt(r.dataset.activityId)]=r);
+  // Insert rows in order after header
+  const header = table.querySelector('tr');
+  newOrder.forEach(id=>{ const row = map[id]; if(row) table.appendChild(row); });
+}
+
 function refreshConcepts(){
   fetch('/ui/soa/{{ soa_id }}/concepts_refresh', {method:'POST'})
     .then(()=>window.location='/ui/soa/{{ soa_id }}/edit');
