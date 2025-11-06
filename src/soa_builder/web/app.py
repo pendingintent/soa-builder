@@ -31,6 +31,7 @@ import pandas as pd
 from ..normalization import normalize_soa
 import requests, time, logging
 from dotenv import load_dotenv
+import re as _re
 
 load_dotenv()  # must come BEFORE reading env-based configuration so values are populated
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")
@@ -129,6 +130,7 @@ def _init_db():
 
 _init_db()
 
+
 # --------------------- Migration: add epoch_id to visit ---------------------
 def _migrate_add_epoch_id_to_visit():
     """Add epoch_id column to visit table if missing."""
@@ -145,7 +147,9 @@ def _migrate_add_epoch_id_to_visit():
     except Exception as e:
         logger.warning("epoch_id migration failed: %s", e)
 
+
 _migrate_add_epoch_id_to_visit()
+
 
 # --------------------- Migration: add epoch_seq to epoch ---------------------
 def _migrate_add_epoch_seq():
@@ -172,7 +176,9 @@ def _migrate_add_epoch_seq():
             conn.commit()
         # Unique index (idempotent)
         try:
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_epoch_soaid_seq ON epoch(soa_id, epoch_seq)")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_epoch_soaid_seq ON epoch(soa_id, epoch_seq)"
+            )
             conn.commit()
         except Exception as ie:  # pragma: no cover
             logger.warning("Failed creating idx_epoch_soaid_seq: %s", ie)
@@ -180,7 +186,9 @@ def _migrate_add_epoch_seq():
     except Exception as e:  # pragma: no cover
         logger.warning("epoch_seq migration failed: %s", e)
 
+
 _migrate_add_epoch_seq()
+
 
 # --------------------- Migration: add epoch label/description ---------------------
 def _migrate_add_epoch_label_desc():
@@ -199,13 +207,18 @@ def _migrate_add_epoch_label_desc():
             try:
                 cur.execute(stmt)
             except Exception as e:  # pragma: no cover
-                logger.warning("Failed epoch label/description migration '%s': %s", stmt, e)
+                logger.warning(
+                    "Failed epoch label/description migration '%s': %s", stmt, e
+                )
         if alters:
             conn.commit()
-            logger.info("Applied epoch label/description migration: %s", ", ".join(alters))
+            logger.info(
+                "Applied epoch label/description migration: %s", ", ".join(alters)
+            )
         conn.close()
     except Exception as e:  # pragma: no cover
         logger.warning("Epoch label/description migration failed: %s", e)
+
 
 _migrate_add_epoch_label_desc()
 # --------------------- Migrations: add study metadata columns ---------------------
@@ -307,10 +320,12 @@ class VisitCreate(BaseModel):
 class ActivityCreate(BaseModel):
     name: str
 
+
 class EpochCreate(BaseModel):
     name: str
     epoch_label: Optional[str] = None
     epoch_description: Optional[str] = None
+
 
 class EpochUpdate(BaseModel):
     name: Optional[str] = None
@@ -393,8 +408,21 @@ def _create_freeze(soa_id: int, version_label: Optional[str]):
     # Epochs snapshot (ordered)
     conn2 = _connect()
     cur2 = conn2.cursor()
-    cur2.execute("SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index", (soa_id,))
-    epochs = [dict(id=r[0], name=r[1], order_index=r[2], epoch_seq=r[3], epoch_label=r[4], epoch_description=r[5]) for r in cur2.fetchall()]
+    cur2.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur2.fetchall()
+    ]
     conn2.close()
     # Concept mapping
     activity_ids = [a["id"] for a in activities]
@@ -1406,8 +1434,21 @@ def get_soa(soa_id: int):
     # Fetch epochs
     conn_ep = _connect()
     cur_ep = conn_ep.cursor()
-    cur_ep.execute("SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index", (soa_id,))
-    epochs = [dict(id=r[0], name=r[1], order_index=r[2], epoch_seq=r[3], epoch_label=r[4], epoch_description=r[5]) for r in cur_ep.fetchall()]
+    cur_ep.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur_ep.fetchall()
+    ]
     conn_ep.close()
     # Also include study metadata if present
     conn = _connect()
@@ -1486,13 +1527,21 @@ def add_visit(soa_id: int, payload: VisitCreate):
     cur.execute("SELECT COUNT(*) FROM visit WHERE soa_id=?", (soa_id,))
     order_index = cur.fetchone()[0] + 1
     if payload.epoch_id is not None:
-        cur.execute("SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (payload.epoch_id, soa_id))
+        cur.execute(
+            "SELECT 1 FROM epoch WHERE id=? AND soa_id=?", (payload.epoch_id, soa_id)
+        )
         if not cur.fetchone():
             conn.close()
             raise HTTPException(400, "Invalid epoch_id for this SOA")
     cur.execute(
         "INSERT INTO visit (soa_id,name,raw_header,order_index,epoch_id) VALUES (?,?,?,?,?)",
-        (soa_id, payload.name, payload.raw_header or payload.name, order_index, payload.epoch_id),
+        (
+            soa_id,
+            payload.name,
+            payload.raw_header or payload.name,
+            order_index,
+            payload.epoch_id,
+        ),
     )
     vid = cur.lastrowid
     conn.commit()
@@ -1517,6 +1566,7 @@ def add_activity(soa_id: int, payload: ActivityCreate):
     conn.close()
     return {"activity_id": aid, "order_index": order_index}
 
+
 @app.post("/soa/{soa_id}/epochs")
 def add_epoch(soa_id: int, payload: EpochCreate):
     if not _soa_exists(soa_id):
@@ -1536,14 +1586,15 @@ def add_epoch(soa_id: int, payload: EpochCreate):
             payload.name,
             order_index,
             next_seq,
-            (payload.epoch_label or '').strip() or None,
-            (payload.epoch_description or '').strip() or None,
+            (payload.epoch_label or "").strip() or None,
+            (payload.epoch_description or "").strip() or None,
         ),
     )
     eid = cur.lastrowid
     conn.commit()
     conn.close()
     return {"epoch_id": eid, "order_index": order_index, "epoch_seq": next_seq}
+
 
 @app.get("/soa/{soa_id}/epochs")
 def list_epochs(soa_id: int):
@@ -1570,6 +1621,7 @@ def list_epochs(soa_id: int):
     conn.close()
     return {"soa_id": soa_id, "epochs": rows}
 
+
 @app.get("/soa/{soa_id}/epochs/{epoch_id}")
 def get_epoch(soa_id: int, epoch_id: int):
     """Return metadata for a single epoch."""
@@ -1594,6 +1646,7 @@ def get_epoch(soa_id: int, epoch_id: int):
         "epoch_label": row[4],
         "epoch_description": row[5],
     }
+
 
 @app.post("/soa/{soa_id}/epochs/{epoch_id}/metadata")
 def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
@@ -1621,7 +1674,10 @@ def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
         vals.append(epoch_id)
         cur.execute(f"UPDATE epoch SET {', '.join(sets)} WHERE id=?", vals)
         conn.commit()
-    cur.execute("SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?", (epoch_id,))
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?",
+        (epoch_id,),
+    )
     row = cur.fetchone()
     conn.close()
     return {
@@ -2027,7 +2083,6 @@ def export_xlsx(soa_id: int, left: Optional[int] = None, right: Optional[int] = 
     conn_meta.close()
     study_id_val = (row_meta[0] if row_meta else None) or f"soa{soa_id}"
     # Sanitize study_id for filename (keep alnum, '-', '_')
-    import re as _re
 
     safe_study = (
         _re.sub(r"[^A-Za-z0-9_-]+", "-", study_id_val.strip())[:80] or f"soa{soa_id}"
@@ -2194,6 +2249,7 @@ def delete_activity(soa_id: int, activity_id: int):
     _reindex("activity", soa_id)
     return {"deleted_activity_id": activity_id}
 
+
 @app.delete("/soa/{soa_id}/epochs/{epoch_id}")
 def delete_epoch(soa_id: int, epoch_id: int):
     if not _soa_exists(soa_id):
@@ -2334,8 +2390,21 @@ def ui_edit(request: Request, soa_id: int):
     # Epochs list
     conn_ep = _connect()
     cur_ep = conn_ep.cursor()
-    cur_ep.execute("SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index", (soa_id,))
-    epochs = [dict(id=r[0], name=r[1], order_index=r[2], epoch_seq=r[3], epoch_label=r[4], epoch_description=r[5]) for r in cur_ep.fetchall()]
+    cur_ep.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE soa_id=? ORDER BY order_index",
+        (soa_id,),
+    )
+    epochs = [
+        dict(
+            id=r[0],
+            name=r[1],
+            order_index=r[2],
+            epoch_seq=r[3],
+            epoch_label=r[4],
+            epoch_description=r[5],
+        )
+        for r in cur_ep.fetchall()
+    ]
     conn_ep.close()
     # No pagination: use all activities
     activities_page = activities
@@ -2418,9 +2487,15 @@ def ui_edit(request: Request, soa_id: int):
 
 @app.post("/ui/soa/{soa_id}/add_visit", response_class=HTMLResponse)
 def ui_add_visit(
-    request: Request, soa_id: int, name: str = Form(...), raw_header: str = Form(""), epoch_id: Optional[int] = Form(None)
+    request: Request,
+    soa_id: int,
+    name: str = Form(...),
+    raw_header: str = Form(""),
+    epoch_id: Optional[int] = Form(None),
 ):
-    add_visit(soa_id, VisitCreate(name=name, raw_header=raw_header or name, epoch_id=epoch_id))
+    add_visit(
+        soa_id, VisitCreate(name=name, raw_header=raw_header or name, epoch_id=epoch_id)
+    )
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
@@ -2428,6 +2503,7 @@ def ui_add_visit(
 def ui_add_activity(request: Request, soa_id: int, name: str = Form(...)):
     add_activity(soa_id, ActivityCreate(name=name))
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
 
 @app.post("/ui/soa/{soa_id}/add_epoch", response_class=HTMLResponse)
 def ui_add_epoch(
@@ -2446,6 +2522,7 @@ def ui_add_epoch(
         ),
     )
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
 
 @app.post("/ui/soa/{soa_id}/update_epoch", response_class=HTMLResponse)
 def ui_update_epoch(
@@ -2609,8 +2686,14 @@ def ui_delete_visit(request: Request, soa_id: int, visit_id: int = Form(...)):
     delete_visit(soa_id, visit_id)
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
+
 @app.post("/ui/soa/{soa_id}/set_visit_epoch", response_class=HTMLResponse)
-def ui_set_visit_epoch(request: Request, soa_id: int, visit_id: int = Form(...), epoch_id: Optional[int] = Form(None)):
+def ui_set_visit_epoch(
+    request: Request,
+    soa_id: int,
+    visit_id: int = Form(...),
+    epoch_id: Optional[int] = Form(None),
+):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
     conn = _connect()
@@ -2635,6 +2718,7 @@ def ui_set_visit_epoch(request: Request, soa_id: int, visit_id: int = Form(...),
 def ui_delete_activity(request: Request, soa_id: int, activity_id: int = Form(...)):
     delete_activity(soa_id, activity_id)
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
 
 @app.post("/ui/soa/{soa_id}/delete_epoch", response_class=HTMLResponse)
 def ui_delete_epoch(request: Request, soa_id: int, epoch_id: int = Form(...)):
@@ -2696,6 +2780,7 @@ def ui_reorder_activities(request: Request, soa_id: int, order: str = Form("")):
     conn.close()
     _record_reorder_audit(soa_id, "activity", old_order, ids)
     return HTMLResponse("OK")
+
 
 @app.post("/ui/soa/{soa_id}/reorder_epochs", response_class=HTMLResponse)
 def ui_reorder_epochs(request: Request, soa_id: int, order: str = Form("")):

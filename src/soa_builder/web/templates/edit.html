@@ -294,14 +294,12 @@ function reorderMatrixVisits(newOrder){
   const headerMap = {}; visitHeaders.forEach(th=>headerMap[parseInt(th.dataset.visitId)]=th);
   // Append in new order after fixed columns
   visitHeaders.forEach(th=>th.remove());
-  const beforeInsertRef = headerRow.children[fixedCols-1];
   newOrder.forEach(id=>{
     const th = headerMap[id]; if(th) headerRow.appendChild(th);
   });
   // Reorder each activity row's cells
   const bodyRows = Array.from(table.querySelectorAll('tr[data-activity-id]'));
   bodyRows.forEach(tr=>{
-    const conceptIndex = 2; // After Activity name + Concepts cell already in place
     const cells = Array.from(tr.querySelectorAll('td[data-visit-id]'));
     const cellMap = {}; cells.forEach(td=>cellMap[parseInt(td.dataset.visitId)]=td);
     cells.forEach(td=>td.remove());
