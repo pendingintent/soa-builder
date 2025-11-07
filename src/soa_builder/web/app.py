@@ -3152,7 +3152,7 @@ def delete_activity(soa_id: int, activity_id: int):
     if b:
         before = {"id": b[0], "name": b[1], "order_index": b[2]}
     cur.execute(
-        "DELETE FROM cell WHERE soa_id=? AND activity_id=", (soa_id, activity_id)
+        "DELETE FROM cell WHERE soa_id=? AND activity_id=?", (soa_id, activity_id)
     )
     cur.execute("DELETE FROM activity WHERE id=?", (activity_id,))
     conn.commit()
