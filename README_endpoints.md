@@ -48,7 +48,9 @@ Response:
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | POST | `/soa/{soa_id}/visits` | Create visit `{ name, raw_header?, epoch_id? }` |
+| PATCH | `/soa/{soa_id}/visits/{visit_id}` | Update visit (partial) returns `updated_fields` |
 | DELETE | `/soa/{soa_id}/visits/{visit_id}` | Delete visit (and its cells) |
+| GET | `/soa/{soa_id}/visits/{visit_id}` | Fetch visit detail |
 | (UI) POST | `/ui/soa/{soa_id}/add_visit` | Form submission create visit |
 | (UI) POST | `/ui/soa/{soa_id}/reorder_visits` | Drag reorder (form field `order`) |
 | (UI) POST | `/ui/soa/{soa_id}/delete_visit` | Delete via HTMX |
@@ -62,9 +64,11 @@ Reorder API (JSON) not implemented for visits yet (only form version).
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | POST | `/soa/{soa_id}/activities` | Create activity `{ name }` |
+| PATCH | `/soa/{soa_id}/activities/{activity_id}` | Update activity (partial) returns `updated_fields` |
 | DELETE | `/soa/{soa_id}/activities/{activity_id}` | Delete activity (and its cells & concepts) |
 | POST | `/soa/{soa_id}/activities/{activity_id}/concepts` | Set concepts list `{ concept_codes: [...] }` |
 | POST | `/soa/{soa_id}/activities/bulk` | Bulk add activities (payload defined in code) |
+| GET | `/soa/{soa_id}/activities/{activity_id}` | Fetch activity detail |
 | (UI) POST | `/ui/soa/{soa_id}/add_activity` | Form create |
 | (UI) POST | `/ui/soa/{soa_id}/reorder_activities` | Drag reorder |
 | (UI) POST | `/ui/soa/{soa_id}/delete_activity` | Delete via HTMX |
@@ -77,7 +81,7 @@ Reorder API (JSON) not implemented for visits yet (only form version).
 | POST | `/soa/{soa_id}/epochs` | Create epoch `{ name }` (sequence auto-assigned) |
 | GET | `/soa/{soa_id}/epochs` | List epochs (ordered) |
 | GET | `/soa/{soa_id}/epochs/{epoch_id}` | Fetch epoch detail |
-| POST | `/soa/{soa_id}/epochs/{epoch_id}/metadata` | Update label/description |
+| POST | `/soa/{soa_id}/epochs/{epoch_id}/metadata` | Update name/label/description (returns `updated_fields`) |
 | DELETE | `/soa/{soa_id}/epochs/{epoch_id}` | Delete epoch |
 | (UI) POST | `/ui/soa/{soa_id}/add_epoch` | Form create |
 | (UI) POST | `/ui/soa/{soa_id}/update_epoch` | Update via form |
@@ -90,6 +94,7 @@ Reorder API (JSON) not implemented for visits yet (only form version).
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | GET | `/soa/{soa_id}/elements` | List elements (ordered) |
+| GET | `/soa/{soa_id}/elements/{element_id}` | Fetch element detail |
 | POST | `/soa/{soa_id}/elements` | Create element `{ name, label?, description?, testrl?, teenrl? }` |
 | PATCH | `/soa/{soa_id}/elements/{element_id}` | Update (partial) |
 | DELETE | `/soa/{soa_id}/elements/{element_id}` | Delete |
@@ -179,10 +184,35 @@ Snapshot includes keys: `epochs`, `elements`, `visits`, `activities`, `cells`, `
 | GET | `/soa/{soa_id}/reorder_audit/export/xlsx` | Excel export reorder audit |
 | GET | `/soa/{soa_id}/reorder_audit/export/csv` | CSV export reorder audit |
 | GET | `/soa/{soa_id}/element_audit` | Element audit (see Elements section) |
+| GET | `/soa/{soa_id}/visit_audit` | Visit audit log (create/update/delete) |
+| GET | `/soa/{soa_id}/activity_audit` | Activity audit log (create/update/delete) |
+| GET | `/soa/{soa_id}/epoch_audit` | Epoch audit log (create/update/delete/reorder) |
 
 Rollback audit row fields: `id, soa_id, freeze_id, performed_at, visits_restored, activities_restored, cells_restored, concepts_restored, elements_restored`.
 
 Reorder audit row fields: `id, soa_id, entity_type, old_order_json, new_order_json, performed_at`.
+
+### Audit Entry Shapes
+
+Each per-entity audit endpoint (`element_audit`, `visit_audit`, `activity_audit`, `epoch_audit`) returns rows with a common structure:
+
+```
+{
+  "id": 42,
+  "<entity>_id": 7,
+  "action": "create" | "update" | "delete" | "reorder",
+  "before": { ... } | null,
+  "after": { ... } | null,
+  "performed_at": "2025-11-07T12:34:56.123456+00:00",
+  "updated_fields": ["name","label"]  // present only for update actions
+}
+```
+
+Notes:
+- `before` is null for creates; `after` is null for deletes.
+- `updated_fields` lists the keys that changed between `before` and `after` for update actions (omitted otherwise).
+- Epoch reorder also creates an entry in `reorder_audit`; if epoch attributes (name/label/description) change, an `update` row appears in `epoch_audit` with `updated_fields`.
+- Element reorder emits an `action":"reorder"` row in `element_audit` in addition to the global `reorder_audit` table.
 
 ---
 ## UI Editing Endpoints (HTMX Helpers)
@@ -201,9 +231,9 @@ These endpoints render or redirect; they are not intended for API clients.
 | Domain | JSON Endpoint | UI Endpoint | Body / Form |
 | ------ | ------------- | ----------- | ----------- |
 | Elements | POST `/soa/{soa_id}/elements/reorder` | POST `/ui/soa/{soa_id}/reorder_elements` | JSON array / form `order` |
-| Visits | (not yet) | POST `/ui/soa/{soa_id}/reorder_visits` | form `order` |
-| Activities | (not yet) | POST `/ui/soa/{soa_id}/reorder_activities` | form `order` |
-| Epochs | (not yet) | POST `/ui/soa/{soa_id}/reorder_epochs` | form `order` |
+| Visits | POST `/soa/{soa_id}/visits/reorder` | POST `/ui/soa/{soa_id}/reorder_visits` | JSON array / form `order` |
+| Activities | POST `/soa/{soa_id}/activities/reorder` | POST `/ui/soa/{soa_id}/reorder_activities` | JSON array / form `order` |
+| Epochs | POST `/soa/{soa_id}/epochs/reorder` | POST `/ui/soa/{soa_id}/reorder_epochs` | JSON array / form `order` |
 
 ---
 ## Error Handling
@@ -219,21 +249,24 @@ Example error:
 
 ---
 ## Future Enhancements (Suggested)
-- Add JSON reorder endpoints for visits, activities, epochs for parity.
 - Add pagination / filtering for large audit logs.
 - Introduce authentication & RBAC.
 - Add OpenAPI tags grouping elements vs core vs audits.
-- Implement single-element GET endpoint `/soa/{soa_id}/elements/{element_id}`.
 - Rate limiting & conditional ETag caching for large snapshots.
 
 ---
 ## Quick Reference (Most Used)
 ```
 Create SoA         POST /soa
+Get Visit Detail   GET  /soa/{id}/visits/{visit_id}
+Get Activity Detail GET /soa/{id}/activities/{activity_id}
 List Elements      GET  /soa/{id}/elements
 Create Element     POST /soa/{id}/elements
 Update Element     PATCH /soa/{id}/elements/{element_id}
 Reorder Elements   POST /soa/{id}/elements/reorder   (JSON array)
+Reorder Visits     POST /soa/{id}/visits/reorder     (JSON array)
+Reorder Activities POST /soa/{id}/activities/reorder (JSON array)
+Reorder Epochs     POST /soa/{id}/epochs/reorder     (JSON array)
 Freeze Version     POST /ui/soa/{id}/freeze (form)
 Rollback           POST /ui/soa/{id}/freeze/{freeze_id}/rollback
 Element Audit      GET  /soa/{id}/element_audit

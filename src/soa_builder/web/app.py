@@ -107,6 +107,42 @@ def _init_db():
             performed_at TEXT NOT NULL
         )"""
     )
+    # Visit audit table
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS visit_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            visit_id INTEGER,
+            action TEXT NOT NULL, -- create|update|delete|reorder
+            before_json TEXT,
+            after_json TEXT,
+            performed_at TEXT NOT NULL
+        )"""
+    )
+    # Activity audit table
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS activity_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            activity_id INTEGER,
+            action TEXT NOT NULL, -- create|update|delete|reorder
+            before_json TEXT,
+            after_json TEXT,
+            performed_at TEXT NOT NULL
+        )"""
+    )
+    # Epoch audit table
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS epoch_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            soa_id INTEGER NOT NULL,
+            epoch_id INTEGER,
+            action TEXT NOT NULL, -- create|update|delete|reorder
+            before_json TEXT,
+            after_json TEXT,
+            performed_at TEXT NOT NULL
+        )"""
+    )
     # Epochs: high-level study phase grouping (optional). Behaves like visits/activities list ordering.
     cur.execute(
         """CREATE TABLE IF NOT EXISTS epoch (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
@@ -445,6 +481,16 @@ class ElementUpdate(BaseModel):
     teenrl: Optional[str] = None
 
 
+class VisitUpdate(BaseModel):
+    name: Optional[str] = None
+    raw_header: Optional[str] = None
+    epoch_id: Optional[int] = None
+
+
+class ActivityUpdate(BaseModel):
+    name: Optional[str] = None
+
+
 def _record_element_audit(
     soa_id: int,
     action: str,
@@ -470,6 +516,87 @@ def _record_element_audit(
         conn.close()
     except Exception as e:  # pragma: no cover
         logger.warning("Failed recording element audit: %s", e)
+
+
+def _record_visit_audit(
+    soa_id: int,
+    action: str,
+    visit_id: Optional[int],
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+):
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO visit_audit (soa_id, visit_id, action, before_json, after_json, performed_at) VALUES (?,?,?,?,?,?)",
+            (
+                soa_id,
+                visit_id,
+                action,
+                json.dumps(before) if before else None,
+                json.dumps(after) if after else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("Failed recording visit audit: %s", e)
+
+
+def _record_activity_audit(
+    soa_id: int,
+    action: str,
+    activity_id: Optional[int],
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+):
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO activity_audit (soa_id, activity_id, action, before_json, after_json, performed_at) VALUES (?,?,?,?,?,?)",
+            (
+                soa_id,
+                activity_id,
+                action,
+                json.dumps(before) if before else None,
+                json.dumps(after) if after else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("Failed recording activity audit: %s", e)
+
+
+def _record_epoch_audit(
+    soa_id: int,
+    action: str,
+    epoch_id: Optional[int],
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+):
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO epoch_audit (soa_id, epoch_id, action, before_json, after_json, performed_at) VALUES (?,?,?,?,?,?)",
+            (
+                soa_id,
+                epoch_id,
+                action,
+                json.dumps(before) if before else None,
+                json.dumps(after) if after else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("Failed recording epoch audit: %s", e)
 
 
 # --------------------- Element REST Endpoints ---------------------
@@ -498,6 +625,34 @@ def list_elements(soa_id: int):
     ]
     conn.close()
     return JSONResponse(rows)
+
+
+@app.get("/soa/{soa_id}/elements/{element_id}", response_class=JSONResponse)
+def get_element(soa_id: int, element_id: int):
+    """Return details for a single element (parity with visit/activity/epoch detail endpoints)."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,label,description,testrl,teenrl,order_index,created_at FROM element WHERE id=? AND soa_id=?",
+        (element_id, soa_id),
+    )
+    r = cur.fetchone()
+    conn.close()
+    if not r:
+        raise HTTPException(404, "Element not found")
+    return {
+        "id": r[0],
+        "soa_id": soa_id,
+        "name": r[1],
+        "label": r[2],
+        "description": r[3],
+        "testrl": r[4],
+        "teenrl": r[5],
+        "order_index": r[6],
+        "created_at": r[7],
+    }
 
 
 @app.get("/soa/{soa_id}/element_audit", response_class=JSONResponse)
@@ -638,8 +793,17 @@ def update_element(soa_id: int, element_id: int, payload: ElementUpdate):
         "order_index": r[6],
         "created_at": r[7],
     }
-    _record_element_audit(soa_id, "update", element_id, before=before, after=after)
-    return JSONResponse(after)
+    # Determine which mutable fields actually changed (excluding id, order_index, created_at)
+    mutable_fields = ["name", "label", "description", "testrl", "teenrl"]
+    updated_fields = [f for f in mutable_fields if before.get(f) != after.get(f)]
+    _record_element_audit(
+        soa_id,
+        "update",
+        element_id,
+        before=before,
+        after={**after, "updated_fields": updated_fields},
+    )
+    return JSONResponse({**after, "updated_fields": updated_fields})
 
 
 @app.delete("/soa/{soa_id}/elements/{element_id}", response_class=JSONResponse)
@@ -696,6 +860,88 @@ def reorder_elements_api(soa_id: int, order: List[int]):
         soa_id,
         "reorder",
         element_id=None,
+        before={"old_order": old_order},
+        after={"new_order": order},
+    )
+    return JSONResponse({"ok": True, "old_order": old_order, "new_order": order})
+
+
+@app.post("/soa/{soa_id}/visits/reorder", response_class=JSONResponse)
+def reorder_visits_api(soa_id: int, order: List[int]):
+    """JSON reorder endpoint for visits (parity with elements). Body is array of visit IDs in desired order."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    if not order:
+        raise HTTPException(400, "Order list required")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM visit WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM visit WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(order) - existing:
+        conn.close()
+        raise HTTPException(400, "Order contains invalid visit id")
+    for idx, vid in enumerate(order, start=1):
+        cur.execute("UPDATE visit SET order_index=? WHERE id=?", (idx, vid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "visit", old_order, order)
+    return JSONResponse({"ok": True, "old_order": old_order, "new_order": order})
+
+
+@app.post("/soa/{soa_id}/activities/reorder", response_class=JSONResponse)
+def reorder_activities_api(soa_id: int, order: List[int]):
+    """JSON reorder endpoint for activities."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    if not order:
+        raise HTTPException(400, "Order list required")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM activity WHERE soa_id=? ORDER BY order_index", (soa_id,)
+    )
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM activity WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(order) - existing:
+        conn.close()
+        raise HTTPException(400, "Order contains invalid activity id")
+    for idx, aid in enumerate(order, start=1):
+        cur.execute("UPDATE activity SET order_index=? WHERE id=?", (idx, aid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "activity", old_order, order)
+    return JSONResponse({"ok": True, "old_order": old_order, "new_order": order})
+
+
+@app.post("/soa/{soa_id}/epochs/reorder", response_class=JSONResponse)
+def reorder_epochs_api(soa_id: int, order: List[int]):
+    """JSON reorder endpoint for epochs. Records both global reorder audit and epoch_audit 'reorder' entry."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    if not order:
+        raise HTTPException(400, "Order list required")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM epoch WHERE soa_id=? ORDER BY order_index", (soa_id,))
+    old_order = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM epoch WHERE soa_id=?", (soa_id,))
+    existing = {r[0] for r in cur.fetchall()}
+    if set(order) - existing:
+        conn.close()
+        raise HTTPException(400, "Order contains invalid epoch id")
+    for idx, eid in enumerate(order, start=1):
+        cur.execute("UPDATE epoch SET order_index=? WHERE id=?", (idx, eid))
+    conn.commit()
+    conn.close()
+    _record_reorder_audit(soa_id, "epoch", old_order, order)
+    # Epoch-specific audit entry similar to element reorder
+    _record_epoch_audit(
+        soa_id,
+        "reorder",
+        epoch_id=None,
         before={"old_order": old_order},
         after={"new_order": order},
     )
@@ -1969,7 +2215,118 @@ def add_visit(soa_id: int, payload: VisitCreate):
     vid = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"visit_id": vid, "order_index": order_index}
+    result = {"visit_id": vid, "order_index": order_index}
+    _record_visit_audit(
+        soa_id,
+        "create",
+        vid,
+        before=None,
+        after={
+            "id": vid,
+            "name": payload.name,
+            "raw_header": payload.raw_header or payload.name,
+            "order_index": order_index,
+            "epoch_id": payload.epoch_id,
+        },
+    )
+    return result
+
+
+@app.patch("/soa/{soa_id}/visits/{visit_id}")
+def update_visit(soa_id: int, visit_id: int, payload: VisitUpdate):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,raw_header,order_index,epoch_id FROM visit WHERE id=? AND soa_id=?",
+        (visit_id, soa_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Visit not found")
+    before = {
+        "id": row[0],
+        "name": row[1],
+        "raw_header": row[2],
+        "order_index": row[3],
+        "epoch_id": row[4],
+    }
+    # Validate epoch if provided (allow clearing)
+    if payload.epoch_id is not None:
+        if payload.epoch_id is not None:
+            cur.execute(
+                "SELECT 1 FROM epoch WHERE id=? AND soa_id=?",
+                (payload.epoch_id, soa_id),
+            )
+            if not cur.fetchone():
+                conn.close()
+                raise HTTPException(400, "Invalid epoch_id for this SOA")
+    new_name = (
+        (payload.name if payload.name is not None else before["name"]) or ""
+    ).strip()
+    new_raw_header = (
+        (payload.raw_header if payload.raw_header is not None else before["raw_header"])
+        or new_name
+        or ""
+    ).strip()
+    new_epoch_id = (
+        payload.epoch_id if payload.epoch_id is not None else before["epoch_id"]
+    )
+    cur.execute(
+        "UPDATE visit SET name=?, raw_header=?, epoch_id=? WHERE id=?",
+        (new_name or None, new_raw_header or None, new_epoch_id, visit_id),
+    )
+    conn.commit()
+    cur.execute(
+        "SELECT id,name,raw_header,order_index,epoch_id FROM visit WHERE id=?",
+        (visit_id,),
+    )
+    r = cur.fetchone()
+    conn.close()
+    after = {
+        "id": r[0],
+        "name": r[1],
+        "raw_header": r[2],
+        "order_index": r[3],
+        "epoch_id": r[4],
+    }
+    mutable = ["name", "raw_header", "epoch_id"]
+    updated_fields = [f for f in mutable if before.get(f) != after.get(f)]
+    _record_visit_audit(
+        soa_id,
+        "update",
+        visit_id,
+        before=before,
+        after={**after, "updated_fields": updated_fields},
+    )
+    return {**after, "updated_fields": updated_fields}
+
+
+@app.get("/soa/{soa_id}/visits/{visit_id}")
+def get_visit(soa_id: int, visit_id: int):
+    """Return metadata for a single visit (parity with epoch detail endpoint)."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,raw_header,order_index,epoch_id FROM visit WHERE id=? AND soa_id=?",
+        (visit_id, soa_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Visit not found")
+    return {
+        "id": row[0],
+        "soa_id": soa_id,
+        "name": row[1],
+        "raw_header": row[2],
+        "order_index": row[3],
+        "epoch_id": row[4],
+    }
 
 
 @app.post("/soa/{soa_id}/activities")
@@ -1987,7 +2344,73 @@ def add_activity(soa_id: int, payload: ActivityCreate):
     aid = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"activity_id": aid, "order_index": order_index}
+    result = {"activity_id": aid, "order_index": order_index}
+    _record_activity_audit(
+        soa_id,
+        "create",
+        aid,
+        before=None,
+        after={"id": aid, "name": payload.name, "order_index": order_index},
+    )
+    return result
+
+
+@app.patch("/soa/{soa_id}/activities/{activity_id}")
+def update_activity(soa_id: int, activity_id: int, payload: ActivityUpdate):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,order_index FROM activity WHERE id=? AND soa_id=?",
+        (activity_id, soa_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Activity not found")
+    before = {"id": row[0], "name": row[1], "order_index": row[2]}
+    new_name = (
+        (payload.name if payload.name is not None else before["name"]) or ""
+    ).strip()
+    cur.execute(
+        "UPDATE activity SET name=? WHERE id=?", (new_name or None, activity_id)
+    )
+    conn.commit()
+    cur.execute(
+        "SELECT id,name,order_index FROM activity WHERE id=?",
+        (activity_id,),
+    )
+    r = cur.fetchone()
+    conn.close()
+    after = {"id": r[0], "name": r[1], "order_index": r[2]}
+    updated_fields = ["name"] if before["name"] != after["name"] else []
+    _record_activity_audit(
+        soa_id,
+        "update",
+        activity_id,
+        before=before,
+        after={**after, "updated_fields": updated_fields},
+    )
+    return {**after, "updated_fields": updated_fields}
+
+
+@app.get("/soa/{soa_id}/activities/{activity_id}")
+def get_activity(soa_id: int, activity_id: int):
+    """Return metadata for a single activity (parity with epoch & visit detail endpoints)."""
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,name,order_index FROM activity WHERE id=? AND soa_id=?",
+        (activity_id, soa_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Activity not found")
+    return {"id": row[0], "soa_id": soa_id, "name": row[1], "order_index": row[2]}
 
 
 @app.post("/soa/{soa_id}/epochs")
@@ -2016,7 +2439,22 @@ def add_epoch(soa_id: int, payload: EpochCreate):
     eid = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"epoch_id": eid, "order_index": order_index, "epoch_seq": next_seq}
+    result = {"epoch_id": eid, "order_index": order_index, "epoch_seq": next_seq}
+    _record_epoch_audit(
+        soa_id,
+        "create",
+        eid,
+        before=None,
+        after={
+            "id": eid,
+            "name": payload.name,
+            "order_index": order_index,
+            "epoch_seq": next_seq,
+            "epoch_label": (payload.epoch_label or "").strip() or None,
+            "epoch_description": (payload.epoch_description or "").strip() or None,
+        },
+    )
+    return result
 
 
 @app.get("/soa/{soa_id}/epochs")
@@ -2082,6 +2520,22 @@ def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
     if not cur.fetchone():
         conn.close()
         raise HTTPException(404, "Epoch not found")
+    # Capture before state
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?",
+        (epoch_id,),
+    )
+    b = cur.fetchone()
+    before = None
+    if b:
+        before = {
+            "id": b[0],
+            "name": b[1],
+            "order_index": b[2],
+            "epoch_seq": b[3],
+            "epoch_label": b[4],
+            "epoch_description": b[5],
+        }
     sets = []
     vals = []
     if payload.name is not None:
@@ -2103,7 +2557,7 @@ def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
     )
     row = cur.fetchone()
     conn.close()
-    return {
+    after = {
         "id": row[0],
         "name": row[1],
         "order_index": row[2],
@@ -2111,6 +2565,16 @@ def update_epoch_metadata(soa_id: int, epoch_id: int, payload: EpochUpdate):
         "epoch_label": row[4],
         "epoch_description": row[5],
     }
+    mutable = ["name", "epoch_label", "epoch_description"]
+    updated_fields = [f for f in mutable if before and before.get(f) != after.get(f)]
+    _record_epoch_audit(
+        soa_id,
+        "update",
+        epoch_id,
+        before=before,
+        after={**after, "updated_fields": updated_fields},
+    )
+    return {**after, "updated_fields": updated_fields}
 
 
 @app.post("/soa/{soa_id}/activities/{activity_id}/concepts")
@@ -2645,11 +3109,27 @@ def delete_visit(soa_id: int, visit_id: int):
         conn.close()
         raise HTTPException(404, "Visit not found")
     # cascade cells
+    # Capture before for audit
+    cur.execute(
+        "SELECT id,name,raw_header,order_index,epoch_id FROM visit WHERE id=?",
+        (visit_id,),
+    )
+    b = cur.fetchone()
+    before = None
+    if b:
+        before = {
+            "id": b[0],
+            "name": b[1],
+            "raw_header": b[2],
+            "order_index": b[3],
+            "epoch_id": b[4],
+        }
     cur.execute("DELETE FROM cell WHERE soa_id=? AND visit_id=?", (soa_id, visit_id))
     cur.execute("DELETE FROM visit WHERE id=?", (visit_id,))
     conn.commit()
     conn.close()
     _reindex("visit", soa_id)
+    _record_visit_audit(soa_id, "delete", visit_id, before=before, after=None)
     return {"deleted_visit_id": visit_id}
 
 
@@ -2664,12 +3144,21 @@ def delete_activity(soa_id: int, activity_id: int):
         conn.close()
         raise HTTPException(404, "Activity not found")
     cur.execute(
-        "DELETE FROM cell WHERE soa_id=? AND activity_id=?", (soa_id, activity_id)
+        "SELECT id,name,order_index FROM activity WHERE id=?",
+        (activity_id,),
+    )
+    b = cur.fetchone()
+    before = None
+    if b:
+        before = {"id": b[0], "name": b[1], "order_index": b[2]}
+    cur.execute(
+        "DELETE FROM cell WHERE soa_id=? AND activity_id=", (soa_id, activity_id)
     )
     cur.execute("DELETE FROM activity WHERE id=?", (activity_id,))
     conn.commit()
     conn.close()
     _reindex("activity", soa_id)
+    _record_activity_audit(soa_id, "delete", activity_id, before=before, after=None)
     return {"deleted_activity_id": activity_id}
 
 
@@ -2683,10 +3172,26 @@ def delete_epoch(soa_id: int, epoch_id: int):
     if not cur.fetchone():
         conn.close()
         raise HTTPException(404, "Epoch not found")
-    cur.execute("DELETE FROM epoch WHERE id=?", (epoch_id,))
+    cur.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?",
+        (epoch_id,),
+    )
+    b = cur.fetchone()
+    before = None
+    if b:
+        before = {
+            "id": b[0],
+            "name": b[1],
+            "order_index": b[2],
+            "epoch_seq": b[3],
+            "epoch_label": b[4],
+            "epoch_description": b[5],
+        }
+    cur.execute("DELETE FROM epoch WHERE id=", (epoch_id,))
     conn.commit()
     conn.close()
     _reindex("epoch", soa_id)
+    _record_epoch_audit(soa_id, "delete", epoch_id, before=before, after=None)
     return {"deleted_epoch_id": epoch_id}
 
 
@@ -3021,6 +3526,24 @@ def ui_update_element(
     if not cur.fetchone():
         conn.close()
         raise HTTPException(404, "Element not found")
+    # Capture before
+    cur.execute(
+        "SELECT id,name,label,description,testrl,teenrl,order_index,created_at FROM element WHERE id=?",
+        (element_id,),
+    )
+    b = cur.fetchone()
+    before = None
+    if b:
+        before = {
+            "id": b[0],
+            "name": b[1],
+            "label": b[2],
+            "description": b[3],
+            "testrl": b[4],
+            "teenrl": b[5],
+            "order_index": b[6],
+            "created_at": b[7],
+        }
     cur.execute(
         "UPDATE element SET name=?, label=?, description=?, testrl=?, teenrl=? WHERE id=?",
         (
@@ -3033,20 +3556,33 @@ def ui_update_element(
         ),
     )
     conn.commit()
+    # Fetch after
+    cur.execute(
+        "SELECT id,name,label,description,testrl,teenrl,order_index,created_at FROM element WHERE id=?",
+        (element_id,),
+    )
+    a = cur.fetchone()
     conn.close()
+    after = {
+        "id": a[0],
+        "name": a[1],
+        "label": a[2],
+        "description": a[3],
+        "testrl": a[4],
+        "teenrl": a[5],
+        "order_index": a[6],
+        "created_at": a[7],
+    }
+    mutable_fields = ["name", "label", "description", "testrl", "teenrl"]
+    updated_fields = [
+        f for f in mutable_fields if before and before.get(f) != after.get(f)
+    ]
     _record_element_audit(
         soa_id,
         "update",
         element_id,
-        before=None,  # Could capture previous if needed; omitted for brevity
-        after={
-            "id": element_id,
-            "name": (name or "").strip() or None,
-            "label": (label or "").strip() or None,
-            "description": (description or "").strip() or None,
-            "testrl": (testrl or "").strip() or None,
-            "teenrl": (teenrl or "").strip() or None,
-        },
+        before=before,
+        after={**after, "updated_fields": updated_fields},
     )
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
@@ -3148,7 +3684,33 @@ def ui_update_epoch(
         conn.close()
         raise HTTPException(404, "Epoch not found")
     conn.close()
-    update_epoch_metadata(soa_id, epoch_id, payload)
+    # Capture before
+    conn_b = _connect()
+    cur_b = conn_b.cursor()
+    cur_b.execute(
+        "SELECT id,name,order_index,epoch_seq,epoch_label,epoch_description FROM epoch WHERE id=?",
+        (epoch_id,),
+    )
+    b = cur_b.fetchone()
+    conn_b.close()
+    before = None
+    if b:
+        before = {
+            "id": b[0],
+            "name": b[1],
+            "order_index": b[2],
+            "epoch_seq": b[3],
+            "epoch_label": b[4],
+            "epoch_description": b[5],
+        }
+    after_api = update_epoch_metadata(soa_id, epoch_id, payload)
+    _record_epoch_audit(
+        soa_id,
+        "update",
+        epoch_id,
+        before=before,
+        after=after_api,
+    )
     return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
 
 
@@ -3404,6 +3966,14 @@ def ui_reorder_epochs(request: Request, soa_id: int, order: str = Form("")):
     conn.commit()
     conn.close()
     _record_reorder_audit(soa_id, "epoch", old_order, ids)
+    # Also record epoch-specific reorder audit for parity with JSON endpoint
+    _record_epoch_audit(
+        soa_id,
+        "reorder",
+        epoch_id=None,
+        before={"old_order": old_order},
+        after={"new_order": ids},
+    )
     return HTMLResponse("OK")
 
 

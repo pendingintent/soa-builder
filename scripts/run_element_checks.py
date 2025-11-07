@@ -28,9 +28,11 @@ def check_crud_audit():
     r2 = client.patch(f"/soa/{soa_id}/elements/{eid}", json={"name": "ElemA2"})
     assert r2.status_code == 200, r2.text
     assert r2.json()["name"] == "ElemA2"
+    assert "name" in r2.json()["updated_fields"]
     r2b = client.patch(f"/soa/{soa_id}/elements/{eid}", json={"testrl": "start Z"})
     assert r2b.status_code == 200, r2b.text
     assert r2b.json()["testrl"] == "start Z"
+    assert "testrl" in r2b.json()["updated_fields"]
     r3 = client.delete(f"/soa/{soa_id}/elements/{eid}")
     assert r3.status_code == 200, r3.text
     audit = client.get(
@@ -93,6 +95,9 @@ def check_mandatory_enforcement():
     eid = d3["id"]
     r4 = client.patch(f"/soa/{soa_id}/elements/{eid}", json={"label": "LabelZ"})
     assert r4.status_code == 200 and r4.json()["label"] == "LabelZ"
+    assert (
+        "label" in r4.json()["updated_fields"] and len(r4.json()["updated_fields"]) == 1
+    )
 
 
 if __name__ == "__main__":
