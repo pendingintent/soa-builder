@@ -81,7 +81,7 @@ def _init_db():
     cur.execute(
         """CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
     )
-    # Arms: groupings similar to Visits with optional linkage to an Element by element_id. etcd stores the chosen element.name snapshot.
+    # Arms: groupings similar to Visits. (Legacy element linkage removed; schema now only stores intrinsic fields.)
     cur.execute(
         """CREATE TABLE IF NOT EXISTS arm (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1152,15 +1152,13 @@ def create_arm(soa_id: int, payload: ArmCreate):
     # element linkage removed: etcd always NULL
     etcd_val = None
     cur.execute(
-        """INSERT INTO arm (soa_id,name,label,description,etcd,element_id,order_index,arm_uid)
-            VALUES (?,?,?,?,?,?,?,?)""",
+        """INSERT INTO arm (soa_id,name,label,description,order_index,arm_uid)
+            VALUES (?,?,?,?,?,?)""",
         (
             soa_id,
             name,
             (payload.label or "").strip() or None,
             (payload.description or "").strip() or None,
-            etcd_val,
-            None,  # element_id deprecated
             next_ord,
             new_uid,
         ),
