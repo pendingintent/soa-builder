@@ -534,7 +534,7 @@ def list_element_audit(soa_id: int):
     return JSONResponse(rows)
 
 
-@app.post("/soa/{soa_id}/elements", response_class=JSONResponse)
+@app.post("/soa/{soa_id}/elements", response_class=JSONResponse, status_code=201)
 def create_element(soa_id: int, payload: ElementCreate):
     if not _soa_exists(soa_id):
         raise HTTPException(404, "SOA not found")
@@ -576,7 +576,8 @@ def create_element(soa_id: int, payload: ElementCreate):
         "created_at": now,
     }
     _record_element_audit(soa_id, "create", eid, before=None, after=el)
-    return JSONResponse(el, status_code=201)
+    # FastAPI will apply the declared status_code=201 automatically.
+    return el
 
 
 @app.patch("/soa/{soa_id}/elements/{element_id}", response_class=JSONResponse)

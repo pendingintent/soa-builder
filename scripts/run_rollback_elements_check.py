@@ -43,7 +43,9 @@ def main():
     names = sorted(e["name"] for e in final_elements)
     assert names == ["E1", "E2"], names
     # Verify audit includes elements_restored
-    audit = client.get(f"/soa/{soa_id}/rollback_audit").json()["audit"]
+    audit_resp = client.get(f"/soa/{soa_id}/rollback_audit").json()
+    assert "audit" in audit_resp, f"Expected 'audit' key in response, got: {audit_resp}"
+    audit = audit_resp["audit"]
     assert audit[0].get("elements_restored") == 2, audit[0]
     print("Rollback element restoration check passed.")
 
