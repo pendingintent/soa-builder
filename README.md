@@ -202,6 +202,16 @@ HTML UI:
 Activity Identifiers:
 - Each activity now has a stable `activity_uid` (format `Activity_<n>` unique within a study) maintained during reorder using a two-phase temporary renaming to avoid uniqueness collisions.
 - Unique index `(soa_id, activity_uid)` enforces stability for exports, snapshots and audit trails.
+ 
+Biomedical Concepts API Access:
+- The concepts list and detail pages call the CDISC Library API.
+- Set one (or both) of: `CDISC_SUBSCRIPTION_KEY`, `CDISC_API_KEY`.
+- The server will send all of these headers when possible:
+	- `Ocp-Apim-Subscription-Key: <key>`
+	- `Authorization: Bearer <key>` (when `CDISC_API_KEY` provided)
+	- `api-key: <key>` (legacy fallback)
+- If only one key is defined it is reused across header variants.
+- Directly opening the API URL in the browser will 401 because the browser does not attach the required headers; use the internal detail page or an API client (curl/Postman) with the headers above.
 
 Notes:
 - HTMX is loaded via CDN; no build step required.

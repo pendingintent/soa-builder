@@ -167,6 +167,7 @@ Status typical values: "X" or empty (cleared).
 | POST | `/ui/soa/{soa_id}/concepts_refresh` | Force remote re-fetch + cache reset |
 | GET | `/concepts/status` | Cache diagnostics (see above) |
 | GET | `/ui/concepts` | HTML table listing biomedical concepts (code, title, API href) |
+| GET | `/ui/concepts/{code}` | HTML detail page for a single concept (title, API href, parent concept/package links) |
 
 Concept assignment happens via `POST /soa/{soa_id}/activities/{activity_id}/concepts`.
 

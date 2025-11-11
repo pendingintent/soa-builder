@@ -21,7 +21,7 @@
     <tr>
       <td>{{ r.title }}</td>
       <td>{{ r.code }}</td>
-      <td>{% if r.href %}<a href="{{ r.href }}" target="_blank" rel="noopener">{{ r.href }}</a>{% else %}<em>n/a</em>{% endif %}</td>
+  <td>{% if r.code %}<a href="/ui/concepts/{{ r.code }}">Detail</a>{% else %}<em>n/a</em>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

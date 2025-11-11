@@ -2134,10 +2134,13 @@ def fetch_biomedical_concepts(force: bool = False):
     url = "https://api.library.cdisc.org/api/cosmos/v2/mdr/bc/biomedicalconcepts"
     headers = {"Accept": "application/json"}
     api_key = _get_cdisc_api_key()
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or api_key
+    # Some CDISC gateways require subscription key header, others accept bearer/api-key; send all when available.
+    if subscription_key:
+        headers["Ocp-Apim-Subscription-Key"] = subscription_key
     if api_key:
-        headers["api-key"] = api_key  # primary documented header
-        # also include Authorization variant in case gateway expects it
-        headers["Authorization"] = f"ApiKey {api_key}"
+        headers["Authorization"] = f"Bearer {api_key}"  # bearer token style
+        headers["api-key"] = api_key  # fallback header name
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         _concept_cache["last_status"] = resp.status_code
@@ -3984,9 +3987,69 @@ def ui_concepts_list(request: Request):
             else None
         )
         rows.append({"code": code, "title": title, "href": href})
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or _get_cdisc_api_key()
     return templates.TemplateResponse(
         "concepts_list.html",
-        {"request": request, "rows": rows, "count": len(rows)},
+        {"request": request, "rows": rows, "count": len(rows), "missing_key": subscription_key is None},
+    )
+
+@app.get("/ui/concepts/{code}", response_class=HTMLResponse)
+def ui_concept_detail(code: str, request: Request):
+    """Detail page for a single biomedical concept. Fetches concept JSON from CDISC Library API,
+    extracts title, canonical href, parentBiomedicalConcept href (if any), and parentPackage href.
+    """
+    # Build concept API URL
+    api_href = f"https://api.library.cdisc.org/api/cosmos/v2/mdr/bc/biomedicalconcepts/{code}"
+    headers = {}
+    api_key = _get_cdisc_api_key()
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY")
+    # Some deployments use a single key; if only one provided, reuse it for both header styles
+    unified_key = subscription_key or api_key
+    if unified_key:
+        headers['Ocp-Apim-Subscription-Key'] = unified_key
+    if api_key:
+        headers['Authorization'] = f"Bearer {api_key}"
+        headers['api-key'] = api_key
+    concept_json = None
+    parent_bc_href = None
+    parent_pkg_href = None
+    parent_bc_title = None
+    status = None
+    try:
+        resp = requests.get(api_href, headers=headers, timeout=10)
+        status = resp.status_code
+        if resp.status_code == 200:
+            concept_json = resp.json()
+            # Extract parent biomedical concept link if present
+            parent_bc_href = concept_json.get('parentBiomedicalConcept') or concept_json.get('parent_biomedical_concept')
+            if isinstance(parent_bc_href, dict):
+                parent_bc_title = parent_bc_href.get('title') or parent_bc_href.get('name')
+                parent_bc_href = parent_bc_href.get('href') or parent_bc_href.get('url')
+            # Extract parent package link
+            parent_pkg_href = concept_json.get('parentPackage') or concept_json.get('parent_package')
+            if isinstance(parent_pkg_href, dict):
+                parent_pkg_href = parent_pkg_href.get('href') or parent_pkg_href.get('url')
+        else:
+            concept_json = {"error": f"Upstream returned {resp.status_code}"}
+    except Exception as e:  # pragma: no cover
+        concept_json = {"error": f"Request failed: {e}"}
+    title = None
+    if concept_json:
+        title = concept_json.get('title') or concept_json.get('concept_title') or concept_json.get('name') or code
+    return templates.TemplateResponse(
+        "concept_detail.html",
+        {
+            "request": request,
+            "code": code,
+            "title": title,
+            "api_href": api_href,
+            "parent_bc_href": parent_bc_href,
+            "parent_bc_title": parent_bc_title,
+            "parent_pkg_href": parent_pkg_href,
+            "status": status,
+            "raw": json.dumps(concept_json, indent=2) if concept_json else None,
+            "missing_key": unified_key is None,
+        },
     )
 
 

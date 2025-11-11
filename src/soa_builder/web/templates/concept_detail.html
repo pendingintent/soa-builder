@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Concept: {{ code }}</h2>
+{% if title %}<p><strong>Title:</strong> {{ title }}</p>{% endif %}
+<p><strong>API href:</strong> {{ api_href }}<br>
+<small>Directly opening this URL in your browser omits required headers and may return 401. Use this internal page or an API client with headers:
+<code>Ocp-Apim-Subscription-Key: &lt;key&gt;</code>{% if not missing_key %}, <code>Authorization: Bearer &lt;key&gt;</code>{% endif %}.</small>
+{% if missing_key %}<br><small style="color:#b00;">No key detected (set <code>CDISC_SUBSCRIPTION_KEY</code> or <code>CDISC_API_KEY</code> for live data).</small>{% endif %}
+</p>
+{% if parent_bc_href %}
+  <p><strong>Parent Biomedical Concept:</strong>
+    {% if parent_bc_title %}{{ parent_bc_title }} - {% endif %}
+    <a href="{{ parent_bc_href }}" target="_blank" rel="noopener">{{ parent_bc_href }}</a>
+  </p>
+{% endif %}
+{% if parent_pkg_href %}
+  <p><strong>Parent Package:</strong> <a href="{{ parent_pkg_href }}" target="_blank" rel="noopener">{{ parent_pkg_href }}</a></p>
+{% endif %}
+{% if status %}<p><strong>Upstream Status:</strong> {{ status }}</p>{% endif %}
+<details style="margin-top:1em;">
+  <summary style="cursor:pointer;">Raw JSON</summary>
+  <pre style="background:#f5f5f5;padding:0.75em;overflow:auto;">{{ raw }}</pre>
+</details>
+<p style="margin-top:1.5em;"><a href="/ui/concepts">&larr; Back to concepts list</a></p>
+{% endblock %}
