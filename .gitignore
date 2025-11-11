@@ -88,5 +88,6 @@ normalized/*.json
 
 # App specific
 normalized/
+old-tests/
 
 # End of file
