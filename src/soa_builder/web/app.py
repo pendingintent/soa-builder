@@ -79,7 +79,7 @@ def _init_db():
         """CREATE TABLE IF NOT EXISTS visit (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, raw_header TEXT, order_index INTEGER)"""
     )
     cur.execute(
-        """CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
+    """CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER, activity_uid TEXT)"""
     )
     # Arms: groupings similar to Visits. (Legacy element linkage removed; schema now only stores intrinsic fields.)
     cur.execute(
@@ -591,6 +591,36 @@ def _migrate_rollback_add_elements_restored():
 
 
 _migrate_rollback_add_elements_restored()
+
+# --------------------- Migration: add activity_uid to activity ---------------------
+def _migrate_activity_add_uid():
+    """Add activity_uid column if missing; backfill as Activity_<order_index>."""
+    try:
+        conn = _connect(); cur = conn.cursor()
+        cur.execute("PRAGMA table_info(activity)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "activity_uid" not in cols:
+            cur.execute("ALTER TABLE activity ADD COLUMN activity_uid TEXT")
+            # backfill
+            cur.execute("SELECT id, order_index FROM activity")
+            for rid, oi in cur.fetchall():
+                cur.execute("UPDATE activity SET activity_uid=? WHERE id=?", (f"Activity_{oi}", rid))
+            # create unique index scoped per soa
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_soa_uid ON activity(soa_id, activity_uid)"
+            )
+            conn.commit()
+        else:
+            # still ensure index exists
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_soa_uid ON activity(soa_id, activity_uid)"
+            )
+            conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("activity_uid migration failed: %s", e)
+
+_migrate_activity_add_uid()
 
 # --------------------- Models ---------------------
 
@@ -1344,11 +1374,44 @@ def reorder_activities_api(soa_id: int, order: List[int]):
     if set(order) - existing:
         conn.close()
         raise HTTPException(400, "Order contains invalid activity id")
+    # Capture before state for audit detail (id -> order_index)
+    before_rows = {r[0]: r[1] for r in cur.execute(
+        "SELECT id, order_index FROM activity WHERE soa_id=?", (soa_id,)
+    ).fetchall()}
     for idx, aid in enumerate(order, start=1):
         cur.execute("UPDATE activity SET order_index=? WHERE id=?", (idx, aid))
+    # Prepare after state mapping prior to UID refresh
+    after_rows = {r[0]: r[1] for r in cur.execute(
+        "SELECT id, order_index FROM activity WHERE soa_id=?", (soa_id,)
+    ).fetchall()}
+    # Two-phase UID reassignment to avoid UNIQUE constraint collisions during in-place changes
+    cur.execute(
+        "UPDATE activity SET activity_uid = 'TMP_' || id WHERE soa_id=?",
+        (soa_id,),
+    )
+    cur.execute(
+        "UPDATE activity SET activity_uid = 'Activity_' || order_index WHERE soa_id=?",
+        (soa_id,),
+    )
     conn.commit()
     conn.close()
     _record_reorder_audit(soa_id, "activity", old_order, order)
+    # Activity-level audit entry capturing each id's order change list
+    reorder_details = [
+        {
+            "id": aid,
+            "before_order_index": before_rows.get(aid),
+            "after_order_index": after_rows.get(aid),
+        }
+        for aid in order
+    ]
+    _record_activity_audit(
+        soa_id,
+        "reorder",
+        activity_id=None,
+        before={"old_order": old_order},
+        after={"new_order": order, "details": reorder_details},
+    )
     return JSONResponse({"ok": True, "old_order": old_order, "new_order": order})
 
 
@@ -2799,19 +2862,19 @@ def add_activity(soa_id: int, payload: ActivityCreate):
     cur.execute("SELECT COUNT(*) FROM activity WHERE soa_id=?", (soa_id,))
     order_index = cur.fetchone()[0] + 1
     cur.execute(
-        "INSERT INTO activity (soa_id,name,order_index) VALUES (?,?,?)",
-        (soa_id, payload.name, order_index),
+        "INSERT INTO activity (soa_id,name,order_index,activity_uid) VALUES (?,?,?,?)",
+        (soa_id, payload.name, order_index, f"Activity_{order_index}"),
     )
     aid = cur.lastrowid
     conn.commit()
     conn.close()
-    result = {"activity_id": aid, "order_index": order_index}
+    result = {"activity_id": aid, "order_index": order_index, "activity_uid": f"Activity_{order_index}"}
     _record_activity_audit(
         soa_id,
         "create",
         aid,
         before=None,
-        after={"id": aid, "name": payload.name, "order_index": order_index},
+        after={"id": aid, "name": payload.name, "order_index": order_index, "activity_uid": f"Activity_{order_index}"},
     )
     return result
 
@@ -3187,8 +3250,8 @@ def add_activities_bulk(soa_id: int, payload: BulkActivities):
             continue
         order_index += 1
         cur.execute(
-            "INSERT INTO activity (soa_id,name,order_index) VALUES (?,?,?)",
-            (soa_id, name, order_index),
+            "INSERT INTO activity (soa_id,name,order_index,activity_uid) VALUES (?,?,?,?)",
+            (soa_id, name, order_index, f"Activity_{order_index}"),
         )
         added.append(name)
         existing.add(lname)
@@ -3514,8 +3577,8 @@ def import_matrix(soa_id: int, payload: MatrixImport):
     for a in payload.activities:
         a_index += 1
         cur.execute(
-            "INSERT INTO activity (soa_id,name,order_index) VALUES (?,?,?)",
-            (soa_id, a.name, a_index),
+            "INSERT INTO activity (soa_id,name,order_index,activity_uid) VALUES (?,?,?,?)",
+            (soa_id, a.name, a_index, f"Activity_{a_index}"),
         )
         activity_id_map.append(cur.lastrowid)
     # Insert cells
@@ -3555,6 +3618,17 @@ def _reindex(table: str, soa_id: int):
     ids = [r[0] for r in cur.fetchall()]
     for idx, _id in enumerate(ids, start=1):
         cur.execute(f"UPDATE {table} SET order_index=? WHERE id=?", (idx, _id))
+    # Maintain activity_uid after any activity reindex
+    if table == "activity":
+        # Two-phase UID refresh to satisfy UNIQUE(soa_id, activity_uid) without transient collisions
+        cur.execute(
+            "UPDATE activity SET activity_uid = 'TMP_' || id WHERE soa_id=?",
+            (soa_id,),
+        )
+        cur.execute(
+            "UPDATE activity SET activity_uid = 'Activity_' || order_index WHERE soa_id=?",
+            (soa_id,),
+        )
     conn.commit()
     conn.close()
 
@@ -3613,7 +3687,7 @@ def delete_activity(soa_id: int, activity_id: int):
     if b:
         before = {"id": b[0], "name": b[1], "order_index": b[2]}
     cur.execute(
-        "DELETE FROM cell WHERE soa_id=? AND activity_id=", (soa_id, activity_id)
+        "DELETE FROM cell WHERE soa_id=? AND activity_id=?", (soa_id, activity_id)
     )
     cur.execute("DELETE FROM activity WHERE id=?", (activity_id,))
     conn.commit()
