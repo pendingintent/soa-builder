@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Protocol Terminology Load Audit</h2>
+<form method="get" action="/ui/protocol/terminology/audit" style="margin-bottom:1em;">
+  <label>Source:
+    <select name="source">
+      <option value="">-- any --</option>
+      {% for s in sources %}
+        <option value="{{ s }}" {% if s == current_source %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label style="margin-left:1em;">Start Date: <input type="date" name="start" value="{{ start }}"></label>
+  <label style="margin-left:1em;">End Date: <input type="date" name="end" value="{{ end }}"></label>
+  <button type="submit" style="margin-left:1em;">Apply Filters</button>
+  <a style="margin-left:1em;" href="/ui/protocol/terminology/audit">Reset</a>
+</form>
+<div style="margin-bottom:1em;">
+  <strong>Total audit entries: {{ count }}</strong>
+  <span style="margin-left:1em;">
+    <a href="/protocol/terminology/audit/export.csv?source={{ current_source }}&start={{ start }}&end={{ end }}">Export CSV</a> |
+    <a href="/protocol/terminology/audit/export.json?source={{ current_source }}&start={{ start }}&end={{ end }}">Export JSON</a>
+  </span>
+</div>
+<table border="1" cellspacing="0" cellpadding="4">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Loaded At (UTC)</th>
+      <th>Source</th>
+      <th>Original Filename</th>
+      <th>File Hash (sha256)</th>
+      <th>Rows</th>
+      <th>Columns</th>
+      <th>Sheet</th>
+      <th>Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr {% if r.error %}style="background:#ffe0e0"{% endif %}>
+        <td>{{ r.id }}</td>
+        <td>{{ r.loaded_at }}</td>
+        <td>{{ r.source }}</td>
+        <td>{{ r.original_filename }}</td>
+        <td style="font-size:0.75em; max-width:220px; overflow-wrap:anywhere;">{{ r.file_hash }}</td>
+        <td>{{ r.row_count }}</td>
+        <td>{{ r.column_count }}</td>
+        <td>{{ r.sheet_name }}</td>
+        <td class="{% if r.error %}audit-error{% else %}audit-ok{% endif %}">{% if r.error %}{{ r.error }}{% else %}OK{% endif %}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not rows %}<p><em>No audit entries recorded yet.</em></p>{% endif %}
+{% endblock %}

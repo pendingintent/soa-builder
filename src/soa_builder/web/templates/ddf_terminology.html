@@ -13,6 +13,7 @@
   <label>Search substring: <input type="text" name="search" value="{{ search }}" /></label>
   <label style="margin-left:1em;">Code: <input type="text" name="code" value="{{ code }}" /></label>
   <label style="margin-left:1em;">Codelist Name: <input type="text" name="codelist_name" value="{{ codelist_name }}" /></label>
+  <label style="margin-left:1em;">Codelist Code: <input type="text" name="codelist_code" value="{{ codelist_code }}" /></label>
   <label style="margin-left:1em;">Limit: <input type="number" min="1" max="200" name="limit" value="{{ limit }}" style="width:5em;" /></label>
   <input type="hidden" name="offset" value="0" />
   <button type="submit">Apply</button>
@@ -45,7 +46,8 @@
       <form method="get" action="/ui/ddf/terminology" style="display:inline;">
         <input type="hidden" name="search" value="{{ search }}" />
         <input type="hidden" name="code" value="{{ code }}" />
-        <input type="hidden" name="codelist_name" value="{{ codelist_name }}" />
+  <input type="hidden" name="codelist_name" value="{{ codelist_name }}" />
+  <input type="hidden" name="codelist_code" value="{{ codelist_code }}" />
         <input type="hidden" name="limit" value="{{ limit }}" />
         <input type="hidden" name="offset" value="{{ next_offset }}" />
         <button type="submit">Next Page &raquo;</button>

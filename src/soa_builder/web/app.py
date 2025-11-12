@@ -20,6 +20,7 @@ import csv
 import tempfile
 import json
 from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File, Response
+import re
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -4886,6 +4887,7 @@ def get_ddf_terminology(
     search: Optional[str] = None,
     code: Optional[str] = None,
     codelist_name: Optional[str] = None,
+    codelist_code: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -4924,6 +4926,7 @@ def get_ddf_terminology(
             "cdisc_synonym_s",
             "nci_preferred_term",
             "codelist_name",
+            "codelist_code",
         ]
     ]
     cur.execute("SELECT COUNT(*) FROM ddf_terminology")
@@ -4936,6 +4939,9 @@ def get_ddf_terminology(
     if codelist_name:
         where.append("codelist_name = ?")
         params.append(codelist_name)
+    if codelist_code:
+        where.append("codelist_code = ?")
+        params.append(codelist_code)
     if (not code) and search:
         pattern = f"%{search.lower()}%"
         like_clauses = [f"LOWER({c}) LIKE ?" for c in searchable]
@@ -4962,7 +4968,7 @@ def get_ddf_terminology(
         "matched_count": matched_count,
         "limit": limit,
         "offset": offset,
-        "filters": {"search": search, "code": code, "codelist_name": codelist_name},
+    "filters": {"search": search, "code": code, "codelist_name": codelist_name, "codelist_code": codelist_code},
         "columns": select_cols,
         "rows": rows,
     }
@@ -4974,15 +4980,17 @@ def ui_ddf_terminology(
     search: Optional[str] = None,
     code: Optional[str] = None,
     codelist_name: Optional[str] = None,
+    codelist_code: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     uploaded: Optional[str] = None,
     error: Optional[str] = None,
 ):
     data = get_ddf_terminology(
-        search=search,
-        code=code,
-        codelist_name=codelist_name,
+    search=search,
+    code=code,
+    codelist_name=codelist_name,
+    codelist_code=codelist_code,
         limit=limit,
         offset=offset,
     )
@@ -4994,6 +5002,7 @@ def ui_ddf_terminology(
             "search": search or "",
             "code": code or "",
             "codelist_name": codelist_name or "",
+            "codelist_code": codelist_code or "",
             "uploaded": uploaded,
             "error": error,
         },
@@ -5252,6 +5261,508 @@ def ui_ddf_audit(
 
 
 # --------------------- Entry ---------------------
+
+# --------------------- Protocol Terminology Support ---------------------
+
+
+def load_protocol_terminology(
+    file_path: str,
+    sheet_name: str = "Protocol Terminology 2025-09-26",
+    source: str = "admin",
+    original_filename: Optional[str] = None,
+    file_hash: Optional[str] = None,
+) -> dict:
+    """Load Protocol terminology Excel sheet into SQLite table `protocol_terminology`.
+    Mirrors load_ddf_terminology: drop/create table, sanitize headers, create indexes, record audit.
+    """
+    if not os.path.exists(file_path):
+        _record_protocol_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error=f"File not found: {file_path}",
+        )
+        raise HTTPException(400, f"File not found: {file_path}")
+    try:
+        df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=str)
+    except Exception as e:
+        _record_protocol_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error=f"Read error: {e}",
+        )
+        raise HTTPException(400, f"Failed reading Excel: {e}")
+    if df.empty:
+        _record_protocol_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error="Worksheet empty",
+        )
+        raise HTTPException(400, "Worksheet is empty")
+    raw_cols = list(df.columns)
+    sanitized = []
+    seen = set()
+    for c in raw_cols:
+        sc = re.sub(r"[^a-zA-Z0-9_]+", "_", c.strip().lower()).strip("_") or "col"
+        base = sc
+        i = 1
+        while sc in seen:
+            sc = f"{base}_{i}"
+            i += 1
+        seen.add(sc)
+        sanitized.append(sc)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS protocol_terminology")
+    cur.execute(
+        "CREATE TABLE protocol_terminology (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + ",".join(f"{c} TEXT" for c in sanitized)
+        + ")"
+    )
+    records = [tuple(str(row[c]) for c in raw_cols) for _, row in df.iterrows()]
+    placeholders = ",".join(["?"] * len(raw_cols))
+    cur.executemany(
+        f"INSERT INTO protocol_terminology ({','.join(sanitized)}) VALUES ({placeholders})",
+        records,
+    )
+    try:
+        if "code" in sanitized:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_protocol_code ON protocol_terminology(code)"
+            )
+        if "codelist_name" in sanitized:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_protocol_codelist_name ON protocol_terminology(codelist_name)"
+            )
+    except Exception as ie:  # pragma: no cover
+        logger.warning("Failed creating Protocol indexes: %s", ie)
+    conn.commit()
+    conn.close()
+    _record_protocol_audit(
+        file_path=file_path,
+        sheet_name=sheet_name,
+        row_count=len(records),
+        column_count=len(sanitized),
+        columns_json=json.dumps(sanitized),
+        source=source,
+        file_hash=file_hash,
+        error=None,
+        original_filename=original_filename or os.path.basename(file_path),
+    )
+    return {"columns": sanitized, "row_count": len(records)}
+
+
+@app.post("/admin/load_protocol_terminology")
+def admin_load_protocol(
+    file_path: Optional[str] = None, sheet_name: str = "Protocol Terminology 2025-09-26"
+):
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    )
+    candidates = [
+        os.path.join(project_root, "files", "Protocol_Terminology_2025-09-26.xls"),
+    ]
+    if file_path:
+        fp = file_path
+    else:
+        fp = None
+        for c in candidates:
+            if os.path.exists(c):
+                fp = c
+                break
+        if fp is None:
+            raise HTTPException(
+                400, f"Protocol terminology file not found in candidates: {candidates}"
+            )
+    try:
+        import hashlib, pathlib
+
+        with open(fp, "rb") as fh:
+            file_hash = hashlib.sha256(fh.read()).hexdigest()
+    except Exception:
+        file_hash = None
+    result = load_protocol_terminology(
+        fp, sheet_name=sheet_name, source="admin", file_hash=file_hash
+    )
+    return JSONResponse(
+        {"ok": True, **result, "file_path": fp, "sheet_name": sheet_name}
+    )
+
+
+@app.get("/protocol/terminology")
+def get_protocol_terminology(
+    search: Optional[str] = None,
+    code: Optional[str] = None,
+    codelist_name: Optional[str] = None,
+    codelist_code: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='protocol_terminology'"
+    )
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(
+            404,
+            "protocol_terminology table not found (load via POST /admin/load_protocol_terminology)",
+        )
+    cur.execute("PRAGMA table_info(protocol_terminology)")
+    cols = [r[1] for r in cur.fetchall() if r[1] != "id"]
+    searchable = [
+        c
+        for c in cols
+        if c
+        in [
+            "code",
+            "cdisc_submission_value",
+            "cdisc_definition",
+            "cdisc_synonym_s",
+            "nci_preferred_term",
+            "codelist_name",
+            "codelist_code",
+        ]
+    ]
+    cur.execute("SELECT COUNT(*) FROM protocol_terminology")
+    total_count = cur.fetchone()[0]
+    params: List[Any] = []
+    where = []
+    if code:
+        where.append("code = ?")
+        params.append(code)
+    if codelist_name:
+        where.append("codelist_name = ?")
+        params.append(codelist_name)
+    if codelist_code:
+        where.append("codelist_code = ?")
+        params.append(codelist_code)
+    if (not code) and search:
+        pattern = f"%{search.lower()}%"
+        like_clauses = [f"LOWER({c}) LIKE ?" for c in searchable]
+        params.extend([pattern] * len(like_clauses))
+        where.append("(" + " OR ".join(like_clauses) + ")")
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+    cur.execute(f"SELECT COUNT(*) FROM protocol_terminology{where_sql}", params)
+    matched_count = cur.fetchone()[0]
+    select_cols = ["id"] + cols
+    cur.execute(
+        f"SELECT {', '.join(select_cols)} FROM protocol_terminology{where_sql} ORDER BY code LIMIT ? OFFSET ?",
+        params + [limit, offset],
+    )
+    rows_raw = cur.fetchall()
+    rows = []
+    for r in rows_raw:
+        d = {}
+        for idx, col in enumerate(select_cols):
+            d[col] = r[idx]
+        rows.append(d)
+    conn.close()
+    return {
+        "total_count": total_count,
+        "matched_count": matched_count,
+        "limit": limit,
+        "offset": offset,
+        "filters": {"search": search, "code": code, "codelist_name": codelist_name, "codelist_code": codelist_code},
+        "columns": select_cols,
+        "rows": rows,
+    }
+
+
+@app.get("/ui/protocol/terminology", response_class=HTMLResponse)
+def ui_protocol_terminology(
+    request: Request,
+    search: Optional[str] = None,
+    code: Optional[str] = None,
+    codelist_name: Optional[str] = None,
+    codelist_code: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    uploaded: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    data = get_protocol_terminology(
+        search=search,
+        code=code,
+        codelist_name=codelist_name,
+        codelist_code=codelist_code,
+        limit=limit,
+        offset=offset,
+    )
+    return templates.TemplateResponse(
+        "protocol_terminology.html",
+        {
+            "request": request,
+            **data,
+            "search": search or "",
+            "code": code or "",
+            "codelist_name": codelist_name or "",
+            "codelist_code": codelist_code or "",
+            "uploaded": uploaded,
+            "error": error,
+        },
+    )
+
+
+@app.post("/ui/protocol/terminology/upload", response_class=HTMLResponse)
+def ui_protocol_upload(
+    request: Request,
+    sheet_name: str = Form("Protocol Terminology 2025-09-26"),
+    file: UploadFile = File(...),
+):
+    filename = file.filename or "uploaded.xls"
+    if not (filename.lower().endswith(".xls") or filename.lower().endswith(".xlsx")):
+        return HTMLResponse(
+            "<script>window.location='/ui/protocol/terminology?error=Unsupported+file+type';</script>",
+            status_code=400,
+        )
+    try:
+        import tempfile, hashlib
+
+        suffix = ".xls" if filename.lower().endswith(".xls") else ".xlsx"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        contents = file.file.read()
+        tmp.write(contents)
+        tmp.flush()
+        tmp.close()
+        file_hash = hashlib.sha256(contents).hexdigest()
+        load_protocol_terminology(
+            tmp.name,
+            sheet_name=sheet_name,
+            source="upload",
+            original_filename=filename,
+            file_hash=file_hash,
+        )
+        return HTMLResponse(
+            "<script>window.location='/ui/protocol/terminology?uploaded=1';</script>"
+        )
+    except HTTPException as he:
+        return HTMLResponse(
+            f"<script>window.location='/ui/protocol/terminology?error={he.detail}';</script>",
+            status_code=400,
+        )
+    except Exception as e:
+        esc = str(e).replace("'", "").replace('"', "")
+        return HTMLResponse(
+            f"<script>window.location='/ui/protocol/terminology?error={esc}';</script>",
+            status_code=500,
+        )
+
+
+def _record_protocol_audit(
+    file_path: str,
+    sheet_name: str,
+    row_count: int,
+    column_count: int,
+    columns_json: str,
+    source: str,
+    file_hash: Optional[str],
+    error: Optional[str],
+    original_filename: Optional[str] = None,
+):
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS protocol_terminology_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loaded_at TEXT NOT NULL,
+            file_path TEXT,
+            original_filename TEXT,
+            sheet_name TEXT,
+            row_count INTEGER,
+            column_count INTEGER,
+            columns_json TEXT,
+            source TEXT,
+            file_hash TEXT,
+            error TEXT
+        )"""
+        )
+        cur.execute(
+            "INSERT INTO protocol_terminology_audit (loaded_at,file_path,original_filename,sheet_name,row_count,column_count,columns_json,source,file_hash,error) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                datetime.utcnow().isoformat(),
+                file_path,
+                original_filename,
+                sheet_name,
+                row_count,
+                column_count,
+                columns_json,
+                source,
+                file_hash,
+                error,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("Failed recording Protocol audit: %s", e)
+
+
+def _get_protocol_sources() -> List[str]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='protocol_terminology_audit'"
+    )
+    if not cur.fetchone():
+        conn.close()
+        return []
+    cur.execute(
+        "SELECT DISTINCT source FROM protocol_terminology_audit WHERE source IS NOT NULL ORDER BY source"
+    )
+    sources = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return sources
+
+
+@app.get("/protocol/terminology/audit")
+def get_protocol_audit(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='protocol_terminology_audit'"
+    )
+    if not cur.fetchone():
+        conn.close()
+        return []
+    where_clauses = []
+    params: List[Any] = []
+
+    def _valid_date(d: str) -> bool:
+        try:
+            datetime.strptime(d, "%Y-%m-%d")
+            return True
+        except Exception:
+            return False
+
+    if source:
+        where_clauses.append("source = ?")
+        params.append(source)
+    if start and _valid_date(start):
+        where_clauses.append("substr(loaded_at,1,10) >= ?")
+        params.append(start)
+    if end and _valid_date(end):
+        where_clauses.append("substr(loaded_at,1,10) <= ?")
+        params.append(end)
+    where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    cur.execute(
+        f"SELECT id,loaded_at,original_filename,file_path,sheet_name,row_count,column_count,source,file_hash,error FROM protocol_terminology_audit{where_sql} ORDER BY id DESC",
+        params,
+    )
+    rows = []
+    for r in cur.fetchall():
+        rows.append(
+            {
+                "id": r[0],
+                "loaded_at": r[1],
+                "original_filename": r[2],
+                "file_path": r[3],
+                "sheet_name": r[4],
+                "row_count": r[5],
+                "column_count": r[6],
+                "source": r[7],
+                "file_hash": r[8],
+                "error": r[9],
+            }
+        )
+    conn.close()
+    return rows
+
+
+@app.get("/protocol/terminology/audit/export.csv")
+def export_protocol_audit_csv(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
+    rows = get_protocol_audit(source=source, start=start, end=end)
+    import csv, io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "id",
+            "loaded_at",
+            "source",
+            "original_filename",
+            "file_hash",
+            "row_count",
+            "column_count",
+            "sheet_name",
+            "error",
+        ]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["id"],
+                r["loaded_at"],
+                r["source"],
+                r["original_filename"],
+                r["file_hash"],
+                r["row_count"],
+                r["column_count"],
+                r["sheet_name"],
+                r["error"] or "",
+            ]
+        )
+    csv_data = buf.getvalue()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=protocol_terminology_audit.csv"
+        },
+    )
+
+
+@app.get("/protocol/terminology/audit/export.json")
+def export_protocol_audit_json(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
+    return get_protocol_audit(source=source, start=start, end=end)
+
+
+@app.get("/ui/protocol/terminology/audit", response_class=HTMLResponse)
+def ui_protocol_audit(
+    request: Request,
+    source: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+):
+    rows = get_protocol_audit(source=source, start=start, end=end)
+    sources = _get_protocol_sources()
+    return templates.TemplateResponse(
+        "protocol_terminology_audit.html",
+        {
+            "request": request,
+            "rows": rows,
+            "count": len(rows),
+            "sources": sources,
+            "current_source": source or "",
+            "start": start or "",
+            "end": end or "",
+        },
+    )
 
 
 def main():  # pragma: no cover

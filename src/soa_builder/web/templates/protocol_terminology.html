@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Protocol Terminology</h2>
+{% if uploaded %}<p style="color:#090">Upload succeeded.</p>{% endif %}
+{% if error %}<p style="color:#900">Error: {{ error }}</p>{% endif %}
+<form method="get" action="/ui/protocol/terminology" style="margin-bottom:1em;">
+  <label>Search: <input type="text" name="search" value="{{ search }}" size="30"></label>
+  <label style="margin-left:1em;">Code: <input type="text" name="code" value="{{ code }}" size="12"></label>
+  <label style="margin-left:1em;">Codelist Name: <input type="text" name="codelist_name" value="{{ codelist_name }}" size="20"></label>
+  <label style="margin-left:1em;">Codelist Code: <input type="text" name="codelist_code" value="{{ codelist_code }}" size="14"></label>
+  <label style="margin-left:1em;">Limit: <input type="number" min="1" max="200" name="limit" value="{{ limit }}" style="width:70px;"></label>
+  <input type="hidden" name="offset" value="0">
+  <button type="submit" style="margin-left:1em;">Apply</button>
+</form>
+<form method="post" action="/ui/protocol/terminology/upload" enctype="multipart/form-data" style="margin-bottom:1.5em;">
+  <fieldset style="display:inline-block; padding:0.5em 1em;">
+    <legend>Upload Excel (.xls/.xlsx)</legend>
+    <label>Sheet Name: <input type="text" name="sheet_name" value="Protocol Terminology 2025-09-26" size="28"></label>
+    <label style="margin-left:1em;">File: <input type="file" name="file" accept=".xls,.xlsx" required></label>
+    <button type="submit" style="margin-left:1em;">Upload</button>
+  </fieldset>
+</form>
+<p><strong>Total Rows:</strong> {{ total_count }} | <strong>Matched:</strong> {{ matched_count }} | Page size {{ limit }} | Offset {{ offset }}</p>
+<table border="1" cellspacing="0" cellpadding="4">
+  <thead>
+    <tr>
+      {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr>
+        {% for c in columns %}<td>{{ r[c] }}</td>{% endfor %}
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not rows %}<p><em>No rows found with current filters.</em></p>{% endif %}
+<div style="margin-top:1em;">
+  {% set prev_off = offset - limit %}
+  {% set next_off = offset + limit %}
+  {% if prev_off >= 0 %}
+  <a href="/ui/protocol/terminology?search={{ search }}&code={{ code }}&codelist_name={{ codelist_name }}&codelist_code={{ codelist_code }}&limit={{ limit }}&offset={{ prev_off }}">Prev</a>
+  {% endif %}
+  {% if next_off < matched_count %}
+    {% if prev_off >= 0 %}|{% endif %}
+  <a href="/ui/protocol/terminology?search={{ search }}&code={{ code }}&codelist_name={{ codelist_name }}&codelist_code={{ codelist_code }}&limit={{ limit }}&offset={{ next_off }}">Next</a>
+  {% endif %}
+</div>
+{% endblock %}
