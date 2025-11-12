@@ -390,14 +390,113 @@ Generated on: 2025-11-12
 
 ## Full Endpoint Inventory (Auto-Generated 2025-11-12)
 
+Below is a consolidated list of all FastAPI routes currently defined in `src/soa_builder/web/app.py`. "Type" reflects typical response kind (JSON, HTML, Binary, CSV). UI/Form endpoints are primarily for browser interaction (HTMX/HTML forms) and may redirect.
+
 | Method | Path | Type | Notes |
 |--------|------|------|-------|
-| GET | `/` | HTML | Index & create form |
-| GET | `/concepts/status` | JSON | Concepts cache diagnostics |
-| POST | `/soa` | JSON | Create study |
-| GET | `/soa/{soa_id}` | JSON | Study summary |
-| POST | `/soa/{soa_id}/metadata` | JSON | Update study metadata |
-| GET | `/soa/{soa_id}/normalized` | JSON | Normalized SoA export |
+| GET | `/` | HTML | Index & study creation form |
+| GET | `/concepts/status` | JSON | Biomedical concepts cache diagnostics |
+| GET | `/sdtm/specializations/status` | JSON | SDTM dataset specializations cache diagnostics |
+| GET | `/soa/{soa_id}` | JSON | Study summary (counts, metadata) |
+| GET | `/soa/{soa_id}/elements` | JSON | List elements |
+| GET | `/soa/{soa_id}/elements/{element_id}` | JSON | Element detail |
+| GET | `/soa/{soa_id}/element_audit` | JSON | Element audit log |
+| GET | `/soa/{soa_id}/arms` | JSON | List arms |
+| GET | `/soa/{soa_id}/arm_audit` | JSON | Arm audit log |
+| GET | `/soa/{soa_id}/freeze/{freeze_id}` | JSON | Freeze snapshot JSON |
+| GET | `/ui/soa/{soa_id}/freeze/{freeze_id}/view` | HTML | Freeze snapshot modal |
+| GET | `/ui/soa/{soa_id}/freeze/diff` | HTML | Diff view (query `left`,`right`) |
+| GET | `/soa/{soa_id}/freeze/diff.json` | JSON | Diff JSON (`left`,`right`) |
+| GET | `/soa/{soa_id}/rollback_audit` | JSON | Rollback audit log |
+| GET | `/soa/{soa_id}/reorder_audit` | JSON | Reorder audit log |
+| GET | `/ui/soa/{soa_id}/rollback_audit` | HTML | Rollback audit modal |
+| GET | `/ui/soa/{soa_id}/reorder_audit` | HTML | Reorder audit modal |
+| GET | `/soa/{soa_id}/rollback_audit/export/xlsx` | Binary | Excel export rollback audit |
+| GET | `/soa/{soa_id}/reorder_audit/export/xlsx` | Binary | Excel export reorder audit |
+| GET | `/soa/{soa_id}/reorder_audit/export/csv` | CSV | CSV export reorder audit |
+| GET | `/soa/{soa_id}/visits/{visit_id}` | JSON | Visit detail |
+| GET | `/soa/{soa_id}/activities/{activity_id}` | JSON | Activity detail |
+| GET | `/soa/{soa_id}/epochs` | JSON | List epochs (ordered) |
+| GET | `/soa/{soa_id}/epochs/{epoch_id}` | JSON | Epoch detail |
+| GET | `/soa/{soa_id}/matrix` | JSON | Matrix (visits, activities, cells) |
+| GET | `/soa/{soa_id}/export/xlsx` | Binary | Excel workbook export |
+| GET | `/soa/{soa_id}/normalized` | JSON | Normalized representation |
+| GET | `/ui/soa/{soa_id}/edit` | HTML | Main editing UI |
+| GET | `/ui/concepts` | HTML | Concepts listing |
+| GET | `/ui/concepts/{code}` | HTML | Concept detail (parent links) |
+| GET | `/ui/sdtm/specializations` | HTML | SDTM dataset specializations list |
+| GET | `/ui/sdtm/specializations/{idx}` | HTML | SDTM specialization raw JSON detail |
+| GET | `/ddf/terminology` | JSON | Query DDF terminology rows |
+| GET | `/ui/ddf/terminology` | HTML | DDF terminology UI page |
+| GET | `/ddf/terminology/audit` | JSON | DDF audit entries |
+| GET | `/ddf/terminology/audit/export.csv` | CSV | DDF audit export CSV |
+| GET | `/ddf/terminology/audit/export.json` | JSON | DDF audit export JSON |
+| GET | `/ui/ddf/terminology/audit` | HTML | DDF audit UI page |
+| GET | `/protocol/terminology` | JSON | Query Protocol terminology rows |
+| GET | `/ui/protocol/terminology` | HTML | Protocol terminology UI page |
+| GET | `/protocol/terminology/audit` | JSON | Protocol audit entries |
+| GET | `/protocol/terminology/audit/export.csv` | CSV | Protocol audit export CSV |
+| GET | `/protocol/terminology/audit/export.json` | JSON | Protocol audit export JSON |
+| GET | `/ui/protocol/terminology/audit` | HTML | Protocol audit UI page |
+| POST | `/soa` | JSON | Create study container |
+| POST | `/soa/{soa_id}/metadata` | JSON | Update study metadata fields |
+| POST | `/soa/{soa_id}/elements` | JSON | Create element |
+| POST | `/soa/{soa_id}/elements/reorder` | JSON | Reorder elements |
+| POST | `/soa/{soa_id}/arms` | JSON | Create arm (assigns `arm_uid`) |
+| POST | `/soa/{soa_id}/arms/reorder` | JSON | Reorder arms |
+| POST | `/soa/{soa_id}/visits` | JSON | Create visit |
+| POST | `/soa/{soa_id}/visits/reorder` | JSON | Reorder visits |
+| POST | `/soa/{soa_id}/activities` | JSON | Create activity |
+| POST | `/soa/{soa_id}/activities/reorder` | JSON | Reorder activities |
+| POST | `/soa/{soa_id}/epochs` | JSON | Create epoch |
+| POST | `/soa/{soa_id}/epochs/reorder` | JSON | Reorder epochs |
+| POST | `/soa/{soa_id}/epochs/{epoch_id}/metadata` | JSON | Update epoch metadata |
+| POST | `/soa/{soa_id}/activities/{activity_id}/concepts` | JSON | Set concepts list |
+| POST | `/soa/{soa_id}/activities/bulk` | JSON | Bulk create activities |
+| POST | `/soa/{soa_id}/cells` | JSON | Upsert cell |
+| POST | `/soa/{soa_id}/matrix/import` | JSON | Bulk matrix import |
+| POST | `/ui/soa/create` | HTML | Form create study |
+| POST | `/ui/soa/{soa_id}/update_meta` | HTML | Update metadata form |
+| POST | `/ui/soa/{soa_id}/concepts_refresh` | HTML | Force concepts cache refresh |
+| POST | `/ui/soa/{soa_id}/freeze` | HTML | Create freeze version |
+| POST | `/ui/soa/{soa_id}/freeze/{freeze_id}/rollback` | HTML | Roll back to freeze |
+| POST | `/ui/sdtm/specializations/refresh` | HTML | Force specializations refresh |
+| POST | `/ui/soa/{soa_id}/add_visit` | HTML | Add visit form |
+| POST | `/ui/soa/{soa_id}/add_arm` | HTML | Add arm form |
+| POST | `/ui/soa/{soa_id}/update_arm` | HTML | Update arm form |
+| POST | `/ui/soa/{soa_id}/delete_arm` | HTML | Delete arm form |
+| POST | `/ui/soa/{soa_id}/reorder_arms` | HTML | Reorder arms form |
+| POST | `/ui/soa/{soa_id}/add_element` | HTML | Add element form |
+| POST | `/ui/soa/{soa_id}/update_element` | HTML | Update element form |
+| POST | `/ui/soa/{soa_id}/delete_element` | HTML | Delete element form |
+| POST | `/ui/soa/{soa_id}/reorder_elements` | HTML | Reorder elements form |
+| POST | `/ui/soa/{soa_id}/add_activity` | HTML | Add activity form |
+| POST | `/ui/soa/{soa_id}/add_epoch` | HTML | Add epoch form |
+| POST | `/ui/soa/{soa_id}/update_epoch` | HTML | Update epoch form |
+| POST | `/ui/soa/{soa_id}/set_cell` | HTML | Set cell (HTMX) |
+| POST | `/ui/soa/{soa_id}/toggle_cell` | HTML | Toggle cell (HTMX) |
+| POST | `/ui/soa/{soa_id}/delete_visit` | HTML | Delete visit form |
+| POST | `/ui/soa/{soa_id}/set_visit_epoch` | HTML | Assign/clear visit epoch |
+| POST | `/ui/soa/{soa_id}/delete_activity` | HTML | Delete activity form |
+| POST | `/ui/soa/{soa_id}/delete_epoch` | HTML | Delete epoch form |
+| POST | `/ui/soa/{soa_id}/reorder_visits` | HTML | Reorder visits form |
+| POST | `/ui/soa/{soa_id}/reorder_activities` | HTML | Reorder activities form |
+| POST | `/ui/soa/{soa_id}/reorder_epochs` | HTML | Reorder epochs form |
+| POST | `/admin/load_ddf_terminology` | JSON | Reload DDF terminology sheet |
+| POST | `/ui/ddf/terminology/upload` | HTML | Upload DDF terminology sheet |
+| POST | `/admin/load_protocol_terminology` | JSON | Reload Protocol terminology sheet |
+| POST | `/ui/protocol/terminology/upload` | HTML | Upload Protocol terminology sheet |
+| PATCH | `/soa/{soa_id}/elements/{element_id}` | JSON | Partial update element |
+| PATCH | `/soa/{soa_id}/arms/{arm_id}` | JSON | Partial update arm |
+| PATCH | `/soa/{soa_id}/visits/{visit_id}` | JSON | Partial update visit |
+| PATCH | `/soa/{soa_id}/activities/{activity_id}` | JSON | Partial update activity |
+| DELETE | `/soa/{soa_id}/elements/{element_id}` | JSON | Delete element |
+| DELETE | `/soa/{soa_id}/arms/{arm_id}` | JSON | Delete arm |
+| DELETE | `/soa/{soa_id}/visits/{visit_id}` | JSON | Delete visit |
+| DELETE | `/soa/{soa_id}/activities/{activity_id}` | JSON | Delete activity |
+| DELETE | `/soa/{soa_id}/epochs/{epoch_id}` | JSON | Delete epoch |
+
+If any endpoint returns a non-JSON payload (Excel, CSV, HTML), error responses still use the FastAPI JSON error model. Consider adding explicit OpenAPI tags & descriptions for improved generated docs.
 | GET | `/soa/{soa_id}/matrix` | JSON | Raw matrix (visits/activities/cells) |
 | POST | `/soa/{soa_id}/matrix/import` | JSON | Bulk import matrix |
 | GET | `/soa/{soa_id}/export/xlsx` | Binary | Excel workbook export |
