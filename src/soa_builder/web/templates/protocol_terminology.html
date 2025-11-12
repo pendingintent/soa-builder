@@ -24,13 +24,27 @@
 <table border="1" cellspacing="0" cellpadding="4">
   <thead>
     <tr>
-      {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+      {% for c in columns %}
+        {% if c != 'sheet_dataset_date' %}
+          <th>{{ 'dataset_date' if c == 'dataset_date' else c }}</th>
+        {% endif %}
+      {% endfor %}
+      {% if 'sheet_dataset_date' in columns and 'dataset_date' not in columns %}
+        <th>dataset_date</th>
+      {% endif %}
     </tr>
   </thead>
   <tbody>
     {% for r in rows %}
       <tr>
-        {% for c in columns %}<td>{{ r[c] }}</td>{% endfor %}
+        {% for c in columns %}
+          {% if c != 'sheet_dataset_date' %}
+            <td>{% if c == 'dataset_date' %}{{ r.get('dataset_date') or r.get('sheet_dataset_date') }}{% else %}{{ r[c] }}{% endif %}</td>
+          {% endif %}
+        {% endfor %}
+        {% if 'sheet_dataset_date' in columns and 'dataset_date' not in columns %}
+          <td>{{ r.get('sheet_dataset_date') }}</td>
+        {% endif %}
       </tr>
     {% endfor %}
   </tbody>

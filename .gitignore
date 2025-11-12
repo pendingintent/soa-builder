@@ -89,5 +89,6 @@ normalized/*.json
 # App specific
 normalized/
 old-tests/
+*.bkp
 
 # End of file

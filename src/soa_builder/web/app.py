@@ -629,6 +629,62 @@ def _migrate_activity_add_uid():
 
 _migrate_activity_add_uid()
 
+
+# --------------------- Backfill dataset_date for existing terminology tables ---------------------
+def _backfill_dataset_date(table: str, audit_table: str):
+    """If terminology table exists and has dataset_date (or sheet_dataset_date) column with blank values,
+    attempt to backfill from the latest audit row that has a non-null dataset_date.
+    Safe to run multiple times; will no-op if already populated or columns absent."""
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        # Ensure table exists
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        )
+        if not cur.fetchone():
+            conn.close()
+            return
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = {r[1] for r in cur.fetchall()}
+        date_col = None
+        # Prefer dataset_date; fallback sheet_dataset_date
+        if "dataset_date" in cols:
+            date_col = "dataset_date"
+        elif "sheet_dataset_date" in cols:
+            date_col = "sheet_dataset_date"
+        if not date_col:
+            conn.close()
+            return
+        # Check if any non-empty value exists
+        cur.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {date_col} IS NOT NULL AND {date_col} != ''"
+        )
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return  # already populated
+        # Find latest audit dataset_date
+        cur.execute(
+            f"SELECT dataset_date FROM {audit_table} WHERE dataset_date IS NOT NULL AND dataset_date != '' ORDER BY loaded_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            conn.close()
+            return
+        ds_date = row[0]
+        cur.execute(
+            f"UPDATE {table} SET {date_col}=? WHERE {date_col} IS NULL OR {date_col}=''",
+            (ds_date,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("dataset_date backfill for %s failed: %s", table, e)
+
+
+_backfill_dataset_date("ddf_terminology", "ddf_terminology_audit")
+_backfill_dataset_date("protocol_terminology", "protocol_terminology_audit")
+
 # --------------------- Models ---------------------
 
 
@@ -4739,6 +4795,15 @@ def load_ddf_terminology(
     Records an audit entry in ddf_terminology_audit.
     Returns dict with columns and row count.
     """
+    # Extract dataset date ONLY from sheet_name (must contain YYYY-MM-DD).
+    _date_pattern = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+    m = _date_pattern.search(sheet_name or "")
+    if not m:
+        raise HTTPException(
+            400,
+            "Sheet name must contain dataset date YYYY-MM-DD (e.g. 'DDF Terminology 2025-09-26')",
+        )
+    dataset_date = m.group(1)
     if not os.path.exists(file_path):
         # audit error record
         _record_ddf_audit(
@@ -4750,6 +4815,7 @@ def load_ddf_terminology(
             source=source,
             file_hash=file_hash,
             error=f"File not found: {file_path}",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, f"File not found: {file_path}")
     try:
@@ -4764,6 +4830,7 @@ def load_ddf_terminology(
             source=source,
             file_hash=file_hash,
             error=f"Read error: {e}",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, f"Failed reading Excel: {e}")
     if df.empty:
@@ -4776,20 +4843,26 @@ def load_ddf_terminology(
             source=source,
             file_hash=file_hash,
             error="Worksheet empty",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, "Worksheet is empty")
+    # Build sanitized headers, discarding any worksheet column that normalizes to 'dataset_date'.
     raw_cols = list(df.columns)
-    sanitized = []
+    pairs = []  # (raw, sanitized)
     seen = set()
     for c in raw_cols:
         sc = _sanitize_column(str(c))
+        if sc == "dataset_date":
+            continue  # drop original dataset_date worksheet column; we inject a single synthetic one sourced from sheet name
         base = sc
         i = 2
         while sc in seen:
             sc = f"{base}_{i}"
             i += 1
         seen.add(sc)
-        sanitized.append(sc)
+        pairs.append((c, sc))
+    sanitized = [sc for _, sc in pairs]
+    sanitized.append("dataset_date")  # single authoritative dataset date column
     cols_sql = ", ".join(f"{c} TEXT" for c in sanitized)
     conn = _connect()
     cur = conn.cursor()
@@ -4798,8 +4871,13 @@ def load_ddf_terminology(
         f"CREATE TABLE ddf_terminology (id INTEGER PRIMARY KEY AUTOINCREMENT, {cols_sql})"
     )
     df = df.fillna("")
-    records = [tuple(str(row[c]) for c in raw_cols) for _, row in df.iterrows()]
-    placeholders = ",".join(["?"] * len(raw_cols))
+    kept_raw_cols = [raw for raw, sc in pairs]
+    base_records = [
+        tuple(str(row[c]) for c in kept_raw_cols) for _, row in df.iterrows()
+    ]
+    # Append dataset_date value per row (same for all rows)
+    records = [r + (dataset_date,) for r in base_records]
+    placeholders = ",".join(["?"] * (len(kept_raw_cols) + 1))
     cur.executemany(
         f"INSERT INTO ddf_terminology ({','.join(sanitized)}) VALUES ({placeholders})",
         records,
@@ -4830,6 +4908,7 @@ def load_ddf_terminology(
         file_hash=file_hash,
         error=None,
         original_filename=original_filename or os.path.basename(file_path),
+        dataset_date=dataset_date,
     )
     return {"columns": sanitized, "row_count": len(records)}
 
@@ -4875,7 +4954,11 @@ def admin_load_ddf(
     except Exception:
         file_hash = None
     result = load_ddf_terminology(
-        fp, sheet_name=sheet_name, source="admin", file_hash=file_hash
+        fp,
+        sheet_name=sheet_name,
+        source="admin",
+        original_filename=os.path.basename(fp),
+        file_hash=file_hash,
     )
     return JSONResponse(
         {"ok": True, **result, "file_path": fp, "sheet_name": sheet_name}
@@ -5074,6 +5157,7 @@ def _record_ddf_audit(
     file_hash: Optional[str],
     error: Optional[str],
     original_filename: Optional[str] = None,
+    dataset_date: Optional[str] = None,
 ):
     """Insert audit row (create table if missing)."""
     try:
@@ -5091,11 +5175,22 @@ def _record_ddf_audit(
                 columns_json TEXT,
                 source TEXT,
                 file_hash TEXT,
-                error TEXT
+                error TEXT,
+                dataset_date TEXT
             )"""
         )
+        # Migration: ensure dataset_date column exists if table was created earlier without it.
+        cur.execute("PRAGMA table_info(ddf_terminology_audit)")
+        audit_cols = {r[1] for r in cur.fetchall()}
+        if "dataset_date" not in audit_cols:
+            try:
+                cur.execute(
+                    "ALTER TABLE ddf_terminology_audit ADD COLUMN dataset_date TEXT"
+                )
+            except Exception:
+                pass
         cur.execute(
-            "INSERT INTO ddf_terminology_audit (loaded_at,file_path,original_filename,sheet_name,row_count,column_count,columns_json,source,file_hash,error) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO ddf_terminology_audit (loaded_at,file_path,original_filename,sheet_name,row_count,column_count,columns_json,source,file_hash,error,dataset_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 datetime.utcnow().isoformat(),
                 file_path,
@@ -5107,8 +5202,16 @@ def _record_ddf_audit(
                 source,
                 file_hash,
                 error,
+                dataset_date,
             ),
         )
+        # Index for future date filtering
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ddf_audit_dataset_date ON ddf_terminology_audit(dataset_date)"
+            )
+        except Exception:
+            pass
         conn.commit()
         conn.close()
     except Exception as e:  # pragma: no cover
@@ -5280,6 +5383,15 @@ def load_protocol_terminology(
     """Load Protocol terminology Excel sheet into SQLite table `protocol_terminology`.
     Mirrors load_ddf_terminology: drop/create table, sanitize headers, create indexes, record audit.
     """
+    # Extract dataset date ONLY from sheet_name (must contain YYYY-MM-DD).
+    _date_pattern = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+    m = _date_pattern.search(sheet_name or "")
+    if not m:
+        raise HTTPException(
+            400,
+            "Sheet name must contain dataset date YYYY-MM-DD (e.g. 'Protocol Terminology 2025-09-26')",
+        )
+    dataset_date = m.group(1)
     if not os.path.exists(file_path):
         _record_protocol_audit(
             file_path=file_path,
@@ -5290,6 +5402,7 @@ def load_protocol_terminology(
             source=source,
             file_hash=file_hash,
             error=f"File not found: {file_path}",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, f"File not found: {file_path}")
     try:
@@ -5304,6 +5417,7 @@ def load_protocol_terminology(
             source=source,
             file_hash=file_hash,
             error=f"Read error: {e}",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, f"Failed reading Excel: {e}")
     if df.empty:
@@ -5316,20 +5430,25 @@ def load_protocol_terminology(
             source=source,
             file_hash=file_hash,
             error="Worksheet empty",
+            dataset_date=dataset_date,
         )
         raise HTTPException(400, "Worksheet is empty")
     raw_cols = list(df.columns)
-    sanitized = []
+    pairs = []  # (raw, sanitized)
     seen = set()
     for c in raw_cols:
         sc = re.sub(r"[^a-zA-Z0-9_]+", "_", c.strip().lower()).strip("_") or "col"
+        if sc == "dataset_date":
+            continue  # drop any existing dataset_date worksheet column
         base = sc
         i = 1
         while sc in seen:
             sc = f"{base}_{i}"
             i += 1
         seen.add(sc)
-        sanitized.append(sc)
+        pairs.append((c, sc))
+    sanitized = [sc for _, sc in pairs]
+    sanitized.append("dataset_date")
     conn = _connect()
     cur = conn.cursor()
     cur.execute("DROP TABLE IF EXISTS protocol_terminology")
@@ -5338,8 +5457,12 @@ def load_protocol_terminology(
         + ",".join(f"{c} TEXT" for c in sanitized)
         + ")"
     )
-    records = [tuple(str(row[c]) for c in raw_cols) for _, row in df.iterrows()]
-    placeholders = ",".join(["?"] * len(raw_cols))
+    kept_raw_cols = [raw for raw, sc in pairs]
+    base_records = [
+        tuple(str(row[c]) for c in kept_raw_cols) for _, row in df.iterrows()
+    ]
+    records = [r + (dataset_date,) for r in base_records]
+    placeholders = ",".join(["?"] * (len(kept_raw_cols) + 1))
     cur.executemany(
         f"INSERT INTO protocol_terminology ({','.join(sanitized)}) VALUES ({placeholders})",
         records,
@@ -5367,6 +5490,7 @@ def load_protocol_terminology(
         file_hash=file_hash,
         error=None,
         original_filename=original_filename or os.path.basename(file_path),
+        dataset_date=dataset_date,
     )
     return {"columns": sanitized, "row_count": len(records)}
 
@@ -5401,7 +5525,11 @@ def admin_load_protocol(
     except Exception:
         file_hash = None
     result = load_protocol_terminology(
-        fp, sheet_name=sheet_name, source="admin", file_hash=file_hash
+        fp,
+        sheet_name=sheet_name,
+        source="admin",
+        original_filename=os.path.basename(fp),
+        file_hash=file_hash,
     )
     return JSONResponse(
         {"ok": True, **result, "file_path": fp, "sheet_name": sheet_name}
@@ -5586,6 +5714,7 @@ def _record_protocol_audit(
     file_hash: Optional[str],
     error: Optional[str],
     original_filename: Optional[str] = None,
+    dataset_date: Optional[str] = None,
 ):
     try:
         conn = _connect()
@@ -5602,11 +5731,21 @@ def _record_protocol_audit(
             columns_json TEXT,
             source TEXT,
             file_hash TEXT,
-            error TEXT
+            error TEXT,
+            dataset_date TEXT
         )"""
         )
+        cur.execute("PRAGMA table_info(protocol_terminology_audit)")
+        audit_cols = {r[1] for r in cur.fetchall()}
+        if "dataset_date" not in audit_cols:
+            try:
+                cur.execute(
+                    "ALTER TABLE protocol_terminology_audit ADD COLUMN dataset_date TEXT"
+                )
+            except Exception:
+                pass
         cur.execute(
-            "INSERT INTO protocol_terminology_audit (loaded_at,file_path,original_filename,sheet_name,row_count,column_count,columns_json,source,file_hash,error) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO protocol_terminology_audit (loaded_at,file_path,original_filename,sheet_name,row_count,column_count,columns_json,source,file_hash,error,dataset_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 datetime.utcnow().isoformat(),
                 file_path,
@@ -5618,8 +5757,15 @@ def _record_protocol_audit(
                 source,
                 file_hash,
                 error,
+                dataset_date,
             ),
         )
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_protocol_audit_dataset_date ON protocol_terminology_audit(dataset_date)"
+            )
+        except Exception:
+            pass
         conn.commit()
         conn.close()
     except Exception as e:

@@ -333,28 +333,30 @@ Two parallel terminology domains are supported: DDF Terminology and Protocol Ter
 
 | Domain | Method | Path | Purpose |
 |--------|--------|------|---------|
-| DDF | POST | `/admin/load_ddf_terminology` | (Re)load default DDF Excel from `files/DDF_Terminology_2025-09-26.xls` |
-| DDF | GET | `/ddf/terminology` | Query rows (filters: `search`, `code`, `codelist_name`, `codelist_code`, pagination `limit`,`offset`) |
-| DDF | GET | `/ui/ddf/terminology` | HTML UI page (same filters + upload status) |
-| DDF | POST | `/ui/ddf/terminology/upload` | Upload Excel (.xls/.xlsx) and reload table (form fields: `file`, `sheet_name`) |
-| DDF | GET | `/ddf/terminology/audit` | List audit entries (filters: `source`, `start`, `end`) |
-| DDF | GET | `/ddf/terminology/audit/export.csv` | Export filtered audit rows as CSV |
-| DDF | GET | `/ddf/terminology/audit/export.json` | Export filtered audit rows as JSON |
-| DDF | GET | `/ui/ddf/terminology/audit` | HTML audit listing with filters + export links |
-| Protocol | POST | `/admin/load_protocol_terminology` | (Re)load default Protocol Excel from `files/Protocol_Terminology_2025-09-26.xls` |
-| Protocol | GET | `/protocol/terminology` | Query rows (filters: `search`, `code`, `codelist_name`, `codelist_code`, pagination) |
-| Protocol | GET | `/ui/protocol/terminology` | HTML UI page (same filters + upload status) |
-| Protocol | POST | `/ui/protocol/terminology/upload` | Upload & reload Protocol terminology |
-| Protocol | GET | `/protocol/terminology/audit` | Audit entries (filters: `source`, `start`, `end`) |
-| Protocol | GET | `/protocol/terminology/audit/export.csv` | CSV export of filtered Protocol audit |
-| Protocol | GET | `/protocol/terminology/audit/export.json` | JSON export of filtered Protocol audit |
-| Protocol | GET | `/ui/protocol/terminology/audit` | HTML audit listing + export links |
+| DDF | POST | `/admin/load_ddf_terminology` | (Re)load default DDF Excel from `files/DDF_Terminology_2025-09-26.xls` (captures `dataset_date=2025-09-26`) |
+| DDF | GET | `/ddf/terminology` | Query rows (filters: `search`, `code`, `codelist_name`, `codelist_code`, pagination `limit`,`offset`). Rows include synthetic `dataset_date` extracted only from the sheet name. |
+| DDF | GET | `/ui/ddf/terminology` | HTML UI page (same filters + upload status) including `dataset_date`. |
+| DDF | POST | `/ui/ddf/terminology/upload` | Upload Excel (.xls/.xlsx) and reload table; `dataset_date` auto-derived strictly from sheet name (file name ignored). |
+| DDF | GET | `/ddf/terminology/audit` | List audit entries (filters: `source`, `start`, `end`) each with `dataset_date`. |
+| DDF | GET | `/ddf/terminology/audit/export.csv` | Export filtered audit rows (includes `dataset_date`) as CSV |
+| DDF | GET | `/ddf/terminology/audit/export.json` | Export filtered audit rows (includes `dataset_date`) as JSON |
+| DDF | GET | `/ui/ddf/terminology/audit` | HTML audit listing with filters + export links showing `dataset_date`. |
+| Protocol | POST | `/admin/load_protocol_terminology` | (Re)load default Protocol Excel from `files/Protocol_Terminology_2025-09-26.xls` (captures `dataset_date=2025-09-26`) |
+| Protocol | GET | `/protocol/terminology` | Query rows (filters: `search`, `code`, `codelist_name`, `codelist_code`, pagination). Rows include `dataset_date` extracted only from the sheet name. |
+| Protocol | GET | `/ui/protocol/terminology` | HTML UI page (same filters + upload status) including `dataset_date`. |
+| Protocol | POST | `/ui/protocol/terminology/upload` | Upload & reload Protocol terminology; `dataset_date` auto-derived strictly from sheet name. |
+| Protocol | GET | `/protocol/terminology/audit` | Audit entries (filters: `source`, `start`, `end`) each with `dataset_date`. |
+| Protocol | GET | `/protocol/terminology/audit/export.csv` | CSV export (includes `dataset_date`). |
+| Protocol | GET | `/protocol/terminology/audit/export.json` | JSON export (includes `dataset_date`). |
+| Protocol | GET | `/ui/protocol/terminology/audit` | HTML audit listing + export links showing `dataset_date`. |
 
 ### Terminology Query Parameters
 `search` performs case-insensitive substring across key text columns (`code`, `cdisc_submission_value`, `cdisc_definition`, `cdisc_synonym_s`, `nci_preferred_term`, `codelist_name`, `codelist_code`). Exact-match filters (`code`, `codelist_name`, `codelist_code`) narrow before search is applied. Pagination: `limit` (1–200), `offset` (>=0).
 
 ### Audit Entry Fields
-`id, loaded_at (UTC ISO), file_path, original_filename, sheet_name, row_count, column_count, columns_json, source (admin|upload), file_hash (sha256), error (nullable)`
+`id, loaded_at (UTC ISO), file_path, original_filename, sheet_name, row_count, column_count, columns_json, source (admin|upload), file_hash (sha256), error (nullable), dataset_date`
+
+`dataset_date` is extracted via regex `YYYY-MM-DD` only from the sheet name. If the sheet name does not contain a date substring (e.g. `DDF Terminology 2025-09-26`) the load will fail with HTTP 400. The file name is intentionally ignored to enforce explicit versioning in worksheet naming. An index exists on this field (`idx_ddf_audit_dataset_date`, `idx_protocol_audit_dataset_date`) enabling efficient future filtering/grouping.
 
 Error rows have `row_count=0` and `error` populated (e.g. read or missing file). Successful loads have `error=null`.
 
@@ -373,6 +375,8 @@ curl -s --get 'http://localhost:8000/protocol/terminology' \
 curl -s --get 'http://localhost:8000/protocol/terminology/audit/export.csv' \
   --data-urlencode 'start=2025-11-05' \
   --data-urlencode 'end=2025-11-12' > protocol_audit.csv
+\n+# Show dataset_date values (Protocol audit)
+curl -s --get 'http://localhost:8000/protocol/terminology/audit' | jq '.rows[].dataset_date' | head
 ```
 
 ### Upload via UI Forms
