@@ -4717,6 +4717,7 @@ def ui_reorder_epochs(request: Request, soa_id: int, order: str = Form("")):
 def _sanitize_column(name: str) -> str:
     """Sanitize Excel column header to safe SQLite identifier: lowercase, replace spaces & non-alnum with underscore, collapse repeats."""
     import re
+
     s = name.strip().lower()
     s = re.sub(r"[^a-z0-9]+", "_", s)
     s = re.sub(r"_+", "_", s).strip("_")
@@ -4725,7 +4726,13 @@ def _sanitize_column(name: str) -> str:
     return s
 
 
-def load_ddf_terminology(file_path: str, sheet_name: str = "DDF Terminology 2025-09-26", source: str = "admin", original_filename: Optional[str] = None, file_hash: Optional[str] = None) -> dict:
+def load_ddf_terminology(
+    file_path: str,
+    sheet_name: str = "DDF Terminology 2025-09-26",
+    source: str = "admin",
+    original_filename: Optional[str] = None,
+    file_hash: Optional[str] = None,
+) -> dict:
     """Load DDF terminology Excel sheet into SQLite table `ddf_terminology`.
     Recreates table each time (drop + create) for schema drift tolerance.
     Records an audit entry in ddf_terminology_audit.
@@ -4733,15 +4740,42 @@ def load_ddf_terminology(file_path: str, sheet_name: str = "DDF Terminology 2025
     """
     if not os.path.exists(file_path):
         # audit error record
-        _record_ddf_audit(file_path=file_path, sheet_name=sheet_name, row_count=0, column_count=0, columns_json="[]", source=source, file_hash=file_hash, error=f"File not found: {file_path}")
+        _record_ddf_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error=f"File not found: {file_path}",
+        )
         raise HTTPException(400, f"File not found: {file_path}")
     try:
         df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=str)
     except Exception as e:
-        _record_ddf_audit(file_path=file_path, sheet_name=sheet_name, row_count=0, column_count=0, columns_json="[]", source=source, file_hash=file_hash, error=f"Read error: {e}")
+        _record_ddf_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error=f"Read error: {e}",
+        )
         raise HTTPException(400, f"Failed reading Excel: {e}")
     if df.empty:
-        _record_ddf_audit(file_path=file_path, sheet_name=sheet_name, row_count=0, column_count=0, columns_json="[]", source=source, file_hash=file_hash, error="Worksheet empty")
+        _record_ddf_audit(
+            file_path=file_path,
+            sheet_name=sheet_name,
+            row_count=0,
+            column_count=0,
+            columns_json="[]",
+            source=source,
+            file_hash=file_hash,
+            error="Worksheet empty",
+        )
         raise HTTPException(400, "Worksheet is empty")
     raw_cols = list(df.columns)
     sanitized = []
@@ -4751,27 +4785,39 @@ def load_ddf_terminology(file_path: str, sheet_name: str = "DDF Terminology 2025
         base = sc
         i = 2
         while sc in seen:
-            sc = f"{base}_{i}"; i += 1
+            sc = f"{base}_{i}"
+            i += 1
         seen.add(sc)
         sanitized.append(sc)
     cols_sql = ", ".join(f"{c} TEXT" for c in sanitized)
-    conn = _connect(); cur = conn.cursor()
+    conn = _connect()
+    cur = conn.cursor()
     cur.execute("DROP TABLE IF EXISTS ddf_terminology")
-    cur.execute(f"CREATE TABLE ddf_terminology (id INTEGER PRIMARY KEY AUTOINCREMENT, {cols_sql})")
+    cur.execute(
+        f"CREATE TABLE ddf_terminology (id INTEGER PRIMARY KEY AUTOINCREMENT, {cols_sql})"
+    )
     df = df.fillna("")
     records = [tuple(str(row[c]) for c in raw_cols) for _, row in df.iterrows()]
     placeholders = ",".join(["?"] * len(raw_cols))
-    cur.executemany(f"INSERT INTO ddf_terminology ({','.join(sanitized)}) VALUES ({placeholders})", records)
+    cur.executemany(
+        f"INSERT INTO ddf_terminology ({','.join(sanitized)}) VALUES ({placeholders})",
+        records,
+    )
     # Indexes for faster search/filter
     try:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ddf_code ON ddf_terminology(code)")
         if "cdisc_submission_value" in sanitized:
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ddf_submission ON ddf_terminology(cdisc_submission_value)")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ddf_submission ON ddf_terminology(cdisc_submission_value)"
+            )
         if "codelist_name" in sanitized:
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ddf_codelist_name ON ddf_terminology(codelist_name)")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ddf_codelist_name ON ddf_terminology(codelist_name)"
+            )
     except Exception as ie:  # pragma: no cover
         logger.warning("Failed creating DDF indexes: %s", ie)
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     # Audit success
     _record_ddf_audit(
         file_path=file_path,
@@ -4788,13 +4834,23 @@ def load_ddf_terminology(file_path: str, sheet_name: str = "DDF Terminology 2025
 
 
 @app.post("/admin/load_ddf_terminology")
-def admin_load_ddf(file_path: Optional[str] = None, sheet_name: str = "DDF Terminology 2025-09-26"):
+def admin_load_ddf(
+    file_path: Optional[str] = None, sheet_name: str = "DDF Terminology 2025-09-26"
+):
     """Admin endpoint to (re)load DDF terminology Excel sheet into SQLite."""
     # Determine repo root (src/soa_builder/web/app.py -> ascend 3 levels to /src, then one more to project root)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    )
     candidates = [
-        os.path.join(project_root, "files", "DDF_Terminology_2025-09-26.xls"),  # correct location
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "files", "DDF_Terminology_2025-09-26.xls"),  # previous wrong path for backward compatibility
+        os.path.join(
+            project_root, "files", "DDF_Terminology_2025-09-26.xls"
+        ),  # correct location
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "files",
+            "DDF_Terminology_2025-09-26.xls",
+        ),  # previous wrong path for backward compatibility
     ]
     # If explicit file_path provided, prefer it
     if file_path:
@@ -4806,19 +4862,33 @@ def admin_load_ddf(file_path: Optional[str] = None, sheet_name: str = "DDF Termi
                 fp = c
                 break
         if fp is None:
-            raise HTTPException(400, f"DDF terminology file not found in candidates: {candidates}")
+            raise HTTPException(
+                400, f"DDF terminology file not found in candidates: {candidates}"
+            )
     # compute file hash for audit
     try:
         import hashlib
+
         with open(fp, "rb") as fh:
             file_hash = hashlib.sha256(fh.read()).hexdigest()
     except Exception:
         file_hash = None
-    result = load_ddf_terminology(fp, sheet_name=sheet_name, source="admin", file_hash=file_hash)
-    return JSONResponse({"ok": True, **result, "file_path": fp, "sheet_name": sheet_name})
+    result = load_ddf_terminology(
+        fp, sheet_name=sheet_name, source="admin", file_hash=file_hash
+    )
+    return JSONResponse(
+        {"ok": True, **result, "file_path": fp, "sheet_name": sheet_name}
+    )
+
 
 @app.get("/ddf/terminology")
-def get_ddf_terminology(search: Optional[str] = None, code: Optional[str] = None, codelist_name: Optional[str] = None, limit: int = 50, offset: int = 0):
+def get_ddf_terminology(
+    search: Optional[str] = None,
+    code: Optional[str] = None,
+    codelist_name: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
     """Query DDF terminology rows.
     Parameters:
       - search: case-insensitive substring across selected text columns.
@@ -4828,16 +4898,34 @@ def get_ddf_terminology(search: Optional[str] = None, code: Optional[str] = None
     """
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    conn = _connect(); cur = conn.cursor()
+    conn = _connect()
+    cur = conn.cursor()
     # Ensure table exists
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology'")
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology'"
+    )
     if not cur.fetchone():
         conn.close()
-        raise HTTPException(404, "ddf_terminology table not found (load via POST /admin/load_ddf_terminology)")
+        raise HTTPException(
+            404,
+            "ddf_terminology table not found (load via POST /admin/load_ddf_terminology)",
+        )
     # Column discovery
     cur.execute("PRAGMA table_info(ddf_terminology)")
-    cols = [r[1] for r in cur.fetchall() if r[1] != 'id']
-    searchable = [c for c in cols if c in ["code", "cdisc_submission_value", "cdisc_definition", "cdisc_synonym_s", "nci_preferred_term", "codelist_name"]]
+    cols = [r[1] for r in cur.fetchall() if r[1] != "id"]
+    searchable = [
+        c
+        for c in cols
+        if c
+        in [
+            "code",
+            "cdisc_submission_value",
+            "cdisc_definition",
+            "cdisc_synonym_s",
+            "nci_preferred_term",
+            "codelist_name",
+        ]
+    ]
     cur.execute("SELECT COUNT(*) FROM ddf_terminology")
     total_count = cur.fetchone()[0]
     params = []
@@ -4879,9 +4967,25 @@ def get_ddf_terminology(search: Optional[str] = None, code: Optional[str] = None
         "rows": rows,
     }
 
+
 @app.get("/ui/ddf/terminology", response_class=HTMLResponse)
-def ui_ddf_terminology(request: Request, search: Optional[str] = None, code: Optional[str] = None, codelist_name: Optional[str] = None, limit: int = 50, offset: int = 0, uploaded: Optional[str] = None, error: Optional[str] = None):
-    data = get_ddf_terminology(search=search, code=code, codelist_name=codelist_name, limit=limit, offset=offset)
+def ui_ddf_terminology(
+    request: Request,
+    search: Optional[str] = None,
+    code: Optional[str] = None,
+    codelist_name: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    uploaded: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    data = get_ddf_terminology(
+        search=search,
+        code=code,
+        codelist_name=codelist_name,
+        limit=limit,
+        offset=offset,
+    )
     return templates.TemplateResponse(
         "ddf_terminology.html",
         {
@@ -4895,33 +4999,72 @@ def ui_ddf_terminology(request: Request, search: Optional[str] = None, code: Opt
         },
     )
 
+
 @app.post("/ui/ddf/terminology/upload", response_class=HTMLResponse)
-def ui_ddf_upload(request: Request, sheet_name: str = Form("DDF Terminology 2025-09-26"), file: UploadFile = File(...)):
+def ui_ddf_upload(
+    request: Request,
+    sheet_name: str = Form("DDF Terminology 2025-09-26"),
+    file: UploadFile = File(...),
+):
     """Upload an XLS/XLSX file and reload ddf_terminology table. Redirects back with status message."""
     # Basic validation
     filename = file.filename or "uploaded.xls"
     if not (filename.lower().endswith(".xls") or filename.lower().endswith(".xlsx")):
-        return HTMLResponse(f"<script>window.location='/ui/ddf/terminology?error=Unsupported+file+type';</script>", status_code=400)
+        return HTMLResponse(
+            f"<script>window.location='/ui/ddf/terminology?error=Unsupported+file+type';</script>",
+            status_code=400,
+        )
     try:
         import tempfile
+
         suffix = ".xls" if filename.lower().endswith(".xls") else ".xlsx"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         contents = file.file.read()
-        tmp.write(contents); tmp.flush(); tmp.close()
+        tmp.write(contents)
+        tmp.flush()
+        tmp.close()
         # hash
         import hashlib
+
         file_hash = hashlib.sha256(contents).hexdigest()
-        load_ddf_terminology(tmp.name, sheet_name=sheet_name, source="upload", original_filename=filename, file_hash=file_hash)
-        return HTMLResponse("<script>window.location='/ui/ddf/terminology?uploaded=1';</script>")
+        load_ddf_terminology(
+            tmp.name,
+            sheet_name=sheet_name,
+            source="upload",
+            original_filename=filename,
+            file_hash=file_hash,
+        )
+        return HTMLResponse(
+            "<script>window.location='/ui/ddf/terminology?uploaded=1';</script>"
+        )
     except HTTPException as he:
-        return HTMLResponse(f"<script>window.location='/ui/ddf/terminology?error={he.detail}';</script>", status_code=400)
+        return HTMLResponse(
+            f"<script>window.location='/ui/ddf/terminology?error={he.detail}';</script>",
+            status_code=400,
+        )
     except Exception as e:
-        esc = str(e).replace("'", "").replace("\"", "")
-        return HTMLResponse(f"<script>window.location='/ui/ddf/terminology?error={esc}';</script>", status_code=500)
-def _record_ddf_audit(file_path: str, sheet_name: str, row_count: int, column_count: int, columns_json: str, source: str, file_hash: Optional[str], error: Optional[str], original_filename: Optional[str] = None):
+        esc = str(e).replace("'", "").replace('"', "")
+        return HTMLResponse(
+            f"<script>window.location='/ui/ddf/terminology?error={esc}';</script>",
+            status_code=500,
+        )
+
+
+def _record_ddf_audit(
+    file_path: str,
+    sheet_name: str,
+    row_count: int,
+    column_count: int,
+    columns_json: str,
+    source: str,
+    file_hash: Optional[str],
+    error: Optional[str],
+    original_filename: Optional[str] = None,
+):
     """Insert audit row (create table if missing)."""
     try:
-        conn = _connect(); cur = conn.cursor()
+        conn = _connect()
+        cur = conn.cursor()
         cur.execute(
             """CREATE TABLE IF NOT EXISTS ddf_terminology_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4952,88 +5095,161 @@ def _record_ddf_audit(file_path: str, sheet_name: str, row_count: int, column_co
                 error,
             ),
         )
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
     except Exception as e:  # pragma: no cover
         logger.warning("Failed recording DDF audit: %s", e)
 
+
 def _get_ddf_sources() -> List[str]:
-    conn = _connect(); cur = conn.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology_audit'")
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology_audit'"
+    )
     if not cur.fetchone():
-        conn.close(); return []
-    cur.execute("SELECT DISTINCT source FROM ddf_terminology_audit WHERE source IS NOT NULL ORDER BY source")
+        conn.close()
+        return []
+    cur.execute(
+        "SELECT DISTINCT source FROM ddf_terminology_audit WHERE source IS NOT NULL ORDER BY source"
+    )
     sources = [r[0] for r in cur.fetchall()]
-    conn.close(); return sources
+    conn.close()
+    return sources
+
 
 @app.get("/ddf/terminology/audit")
-def get_ddf_audit(source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None):
-    conn = _connect(); cur = conn.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology_audit'")
+def get_ddf_audit(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ddf_terminology_audit'"
+    )
     if not cur.fetchone():
-        conn.close(); return []
+        conn.close()
+        return []
     where_clauses = []
     params: List[Any] = []
+
     # Validate date inputs (YYYY-MM-DD)
     def _valid_date(d: str) -> bool:
         try:
-            datetime.strptime(d, "%Y-%m-%d"); return True
+            datetime.strptime(d, "%Y-%m-%d")
+            return True
         except Exception:
             return False
+
     if source:
-        where_clauses.append("source = ?"); params.append(source)
+        where_clauses.append("source = ?")
+        params.append(source)
     if start and _valid_date(start):
-        where_clauses.append("substr(loaded_at,1,10) >= ?"); params.append(start)
+        where_clauses.append("substr(loaded_at,1,10) >= ?")
+        params.append(start)
     if end and _valid_date(end):
-        where_clauses.append("substr(loaded_at,1,10) <= ?"); params.append(end)
+        where_clauses.append("substr(loaded_at,1,10) <= ?")
+        params.append(end)
     where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-    cur.execute(f"SELECT id,loaded_at,original_filename,file_path,sheet_name,row_count,column_count,source,file_hash,error FROM ddf_terminology_audit{where_sql} ORDER BY id DESC", params)
+    cur.execute(
+        f"SELECT id,loaded_at,original_filename,file_path,sheet_name,row_count,column_count,source,file_hash,error FROM ddf_terminology_audit{where_sql} ORDER BY id DESC",
+        params,
+    )
     rows = []
     for r in cur.fetchall():
-        rows.append({
-            "id": r[0],
-            "loaded_at": r[1],
-            "original_filename": r[2],
-            "file_path": r[3],
-            "sheet_name": r[4],
-            "row_count": r[5],
-            "column_count": r[6],
-            "source": r[7],
-            "file_hash": r[8],
-            "error": r[9],
-        })
-    conn.close(); return rows
+        rows.append(
+            {
+                "id": r[0],
+                "loaded_at": r[1],
+                "original_filename": r[2],
+                "file_path": r[3],
+                "sheet_name": r[4],
+                "row_count": r[5],
+                "column_count": r[6],
+                "source": r[7],
+                "file_hash": r[8],
+                "error": r[9],
+            }
+        )
+    conn.close()
+    return rows
+
 
 @app.get("/ddf/terminology/audit/export.csv")
-def export_ddf_audit_csv(source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None):
+def export_ddf_audit_csv(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
     rows = get_ddf_audit(source=source, start=start, end=end)
     import csv, io
+
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["id","loaded_at","source","original_filename","file_hash","row_count","column_count","sheet_name","error"])
+    writer.writerow(
+        [
+            "id",
+            "loaded_at",
+            "source",
+            "original_filename",
+            "file_hash",
+            "row_count",
+            "column_count",
+            "sheet_name",
+            "error",
+        ]
+    )
     for r in rows:
-        writer.writerow([
-            r["id"], r["loaded_at"], r["source"], r["original_filename"], r["file_hash"], r["row_count"], r["column_count"], r["sheet_name"], r["error"] or ""
-        ])
+        writer.writerow(
+            [
+                r["id"],
+                r["loaded_at"],
+                r["source"],
+                r["original_filename"],
+                r["file_hash"],
+                r["row_count"],
+                r["column_count"],
+                r["sheet_name"],
+                r["error"] or "",
+            ]
+        )
     csv_data = buf.getvalue()
-    return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=ddf_terminology_audit.csv"})
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=ddf_terminology_audit.csv"
+        },
+    )
+
 
 @app.get("/ddf/terminology/audit/export.json")
-def export_ddf_audit_json(source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None):
+def export_ddf_audit_json(
+    source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
+):
     return get_ddf_audit(source=source, start=start, end=end)
 
+
 @app.get("/ui/ddf/terminology/audit", response_class=HTMLResponse)
-def ui_ddf_audit(request: Request, source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None):
+def ui_ddf_audit(
+    request: Request,
+    source: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+):
     rows = get_ddf_audit(source=source, start=start, end=end)
     sources = _get_ddf_sources()
-    return templates.TemplateResponse("ddf_terminology_audit.html", {
-        "request": request,
-        "rows": rows,
-        "count": len(rows),
-        "sources": sources,
-        "current_source": source or "",
-        "start": start or "",
-        "end": end or "",
-    })
+    return templates.TemplateResponse(
+        "ddf_terminology_audit.html",
+        {
+            "request": request,
+            "rows": rows,
+            "count": len(rows),
+            "sources": sources,
+            "current_source": source or "",
+            "start": start or "",
+            "end": end or "",
+        },
+    )
+
 
 # --------------------- Entry ---------------------
 
