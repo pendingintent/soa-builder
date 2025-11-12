@@ -4968,7 +4968,12 @@ def get_ddf_terminology(
         "matched_count": matched_count,
         "limit": limit,
         "offset": offset,
-    "filters": {"search": search, "code": code, "codelist_name": codelist_name, "codelist_code": codelist_code},
+        "filters": {
+            "search": search,
+            "code": code,
+            "codelist_name": codelist_name,
+            "codelist_code": codelist_code,
+        },
         "columns": select_cols,
         "rows": rows,
     }
@@ -4987,10 +4992,10 @@ def ui_ddf_terminology(
     error: Optional[str] = None,
 ):
     data = get_ddf_terminology(
-    search=search,
-    code=code,
-    codelist_name=codelist_name,
-    codelist_code=codelist_code,
+        search=search,
+        code=code,
+        codelist_name=codelist_name,
+        codelist_code=codelist_code,
         limit=limit,
         offset=offset,
     )
@@ -5480,7 +5485,12 @@ def get_protocol_terminology(
         "matched_count": matched_count,
         "limit": limit,
         "offset": offset,
-        "filters": {"search": search, "code": code, "codelist_name": codelist_name, "codelist_code": codelist_code},
+        "filters": {
+            "search": search,
+            "code": code,
+            "codelist_name": codelist_name,
+            "codelist_code": codelist_code,
+        },
         "columns": select_cols,
         "rows": rows,
     }
