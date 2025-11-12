@@ -49,6 +49,9 @@ def _get_concepts_override():
 
 _concept_cache = {"data": None, "fetched_at": 0}
 _CONCEPT_CACHE_TTL = 60 * 60  # 1 hour TTL
+# SDTM dataset specializations cache (similar TTL)
+_sdtm_specializations_cache = {"data": None, "fetched_at": 0}
+_SDTM_SPECIALIZATIONS_CACHE_TTL = 60 * 60
 app = FastAPI(title="SoA Builder API", version="0.1.0")
 logger = logging.getLogger("soa_builder.concepts")
 if not logger.handlers:
@@ -2308,13 +2311,197 @@ def fetch_biomedical_concepts(force: bool = False):
     return []
 
 
+def fetch_sdtm_specializations(force: bool = False):
+    """Return list of SDTM dataset specializations as [{'title':..., 'href':...}].
+    Remote precedence similar to concepts. Supports optional env override CDISC_SDTM_SPECIALIZATIONS_JSON for tests/offline.
+    Dates removed for simpler UI; results sorted alphabetically by title.
+    """
+    now = time.time()
+    if (
+        not force
+        and _sdtm_specializations_cache["data"]
+        and now - _sdtm_specializations_cache["fetched_at"]
+        < _SDTM_SPECIALIZATIONS_CACHE_TTL
+    ):
+        return _sdtm_specializations_cache["data"]
+
+    override_json = os.environ.get("CDISC_SDTM_SPECIALIZATIONS_JSON")
+    if override_json:
+        try:
+            raw = json.loads(override_json)
+            if isinstance(raw, dict):
+                if "items" in raw and isinstance(raw["items"], list):
+                    items = raw["items"]
+                elif "datasetSpecializations" in raw and isinstance(
+                    raw["datasetSpecializations"], dict
+                ):
+                    items = list(raw["datasetSpecializations"].values())
+                else:
+                    items = [raw]
+            elif isinstance(raw, list):
+                items = raw
+            else:
+                items = []
+            packages: list[dict] = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                title_keys = [
+                    "title",
+                    "name",
+                    "label",
+                    "datasetLabel",
+                    "datasetName",
+                    "datasetSpecializationLabel",
+                    "datasetSpecializationName",
+                ]
+                title = next((it.get(k) for k in title_keys if it.get(k)), "(untitled)")
+                href = it.get("href") or it.get("link")
+                if not href:
+                    id_val = (
+                        it.get("id")
+                        or it.get("datasetSpecializationId")
+                        or it.get("code")
+                    )
+                    if id_val:
+                        href = (
+                            "https://api.library.cdisc.org/api/cosmos/v2/mdr/specializations/sdtm/datasetspecializations/"
+                            + str(id_val)
+                        )
+                packages.append({"title": title, "href": href})
+            packages.sort(key=lambda p: p.get("title", "").lower())
+            _sdtm_specializations_cache.update(data=packages, fetched_at=now)
+            logger.info(
+                "Loaded %d SDTM dataset specializations from override", len(packages)
+            )
+            return packages
+        except Exception:
+            pass
+
+    if os.environ.get("CDISC_SKIP_REMOTE") == "1":
+        _sdtm_specializations_cache.update(data=[], fetched_at=now)
+        logger.warning("CDISC_SKIP_REMOTE=1; SDTM dataset specializations list empty")
+        return []
+
+    url = "https://api.library.cdisc.org/api/cosmos/v2/mdr/specializations/sdtm/datasetspecializations"
+    headers = {"Accept": "application/json"}
+    api_key = _get_cdisc_api_key()
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or api_key
+    if subscription_key:
+        headers["Ocp-Apim-Subscription-Key"] = subscription_key
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["api-key"] = api_key
+
+    packages: list[dict] = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        _sdtm_specializations_cache["last_status"] = resp.status_code
+        _sdtm_specializations_cache["last_url"] = url
+        _sdtm_specializations_cache["last_error"] = None
+        _sdtm_specializations_cache["raw_snippet"] = resp.text[:400]
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+            except ValueError:
+                _sdtm_specializations_cache["last_error"] = "200 but non-JSON response"
+                data = None
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    _sdtm_specializations_cache["last_error"] = (
+                        "Raw string JSON secondary parse failed"
+                    )
+                    data = None
+            items = []
+            if isinstance(data, dict):
+                if "items" in data and isinstance(data["items"], list):
+                    items = data["items"]
+                elif "_links" in data and isinstance(data["_links"], dict):
+                    link_list = []
+                    for key in (
+                        "datasetSpecializations",
+                        "datasetspecializations",
+                        "packages",
+                    ):
+                        val = data["_links"].get(key)
+                        if isinstance(val, list):
+                            link_list = val
+                            break
+                    for link in link_list:
+                        if not isinstance(link, dict):
+                            continue
+                        href = link.get("href")
+                        title = link.get("title") or href
+                        packages.append({"title": title, "href": href})
+                elif "datasetSpecializations" in data and isinstance(
+                    data["datasetSpecializations"], dict
+                ):
+                    items = list(data["datasetSpecializations"].values())
+                else:
+                    items = [data]
+            elif isinstance(data, list):
+                items = data
+            if items:
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    title_keys = [
+                        "title",
+                        "name",
+                        "label",
+                        "datasetLabel",
+                        "datasetName",
+                        "datasetSpecializationLabel",
+                        "datasetSpecializationName",
+                    ]
+                    title = next(
+                        (it.get(k) for k in title_keys if it.get(k)), "(untitled)"
+                    )
+                    href = it.get("href") or it.get("link")
+                    if not href:
+                        id_val = (
+                            it.get("id")
+                            or it.get("datasetSpecializationId")
+                            or it.get("code")
+                        )
+                        if id_val:
+                            href = f"{url}/{id_val}"
+                    packages.append({"title": title, "href": href})
+        else:
+            _sdtm_specializations_cache["last_error"] = (
+                f"HTTP {resp.status_code}: {resp.text[:180]}"
+            )
+    except Exception as e:
+        logger.error("SDTM dataset specializations fetch error: %s", e)
+        _sdtm_specializations_cache["last_error"] = str(e)
+
+    packages.sort(key=lambda p: p.get("title", "").lower())
+    _sdtm_specializations_cache.update(data=packages, fetched_at=now)
+    logger.info(
+        "Fetched %d SDTM dataset specializations from remote API", len(packages)
+    )
+    return packages
+
+
 @app.on_event("startup")
 def preload_concepts():  # pragma: no cover (covered indirectly via tests reload)
+    """Preload cached terminology datasets on service startup.
+
+    Fetches biomedical concepts and SDTM dataset specializations so first request
+    hits warm caches. Errors are logged but not raised (startup should proceed).
+    """
     try:
         concepts = fetch_biomedical_concepts(force=True)
         logger.info("Startup preload concepts count=%d", len(concepts))
     except Exception as e:
         logger.error("Startup concept preload failed: %s", e)
+    try:
+        sdtm_specs = fetch_sdtm_specializations(force=True)
+        logger.info("Startup preload SDTM specializations count=%d", len(sdtm_specs))
+    except Exception as e:
+        logger.error("Startup SDTM specializations preload failed: %s", e)
 
 
 @app.post("/ui/soa/{soa_id}/concepts_refresh")
@@ -2606,6 +2793,38 @@ def concepts_status():
         "override_present": bool(_get_concepts_override()),
         "skip_remote": os.environ.get("CDISC_SKIP_REMOTE") == "1",
     }
+
+
+@app.get("/sdtm/specializations/status")
+def sdtm_specializations_status():
+    """Return diagnostics for SDTM dataset specializations fetch/cache."""
+    data = _sdtm_specializations_cache.get("data") or []
+    fetched_at = _sdtm_specializations_cache.get("fetched_at")
+    age = (time.time() - fetched_at) if fetched_at else None
+    sample = data[:3]
+    return {
+        "count": len(data),
+        "fetched_at": fetched_at,
+        "cache_age_sec": age,
+        "last_status": _sdtm_specializations_cache.get("last_status"),
+        "last_error": _sdtm_specializations_cache.get("last_error"),
+        "last_url": _sdtm_specializations_cache.get("last_url"),
+        "raw_snippet": _sdtm_specializations_cache.get("raw_snippet"),
+        "api_key_present": bool(_get_cdisc_api_key()),
+        "skip_remote": os.environ.get("CDISC_SKIP_REMOTE") == "1",
+        "override_present": bool(os.environ.get("CDISC_SDTM_SPECIALIZATIONS_JSON")),
+        "sample": sample,
+    }
+
+
+@app.post("/ui/sdtm/specializations/refresh", response_class=HTMLResponse)
+def ui_sdtm_specializations_refresh(request: Request):
+    """Force refresh of SDTM specializations cache and redirect back to list."""
+    fetch_sdtm_specializations(force=True)
+    # HX redirect support
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse("", headers={"HX-Redirect": "/ui/sdtm/specializations"})
+    return HTMLResponse("<script>window.location='/ui/sdtm/specializations';</script>")
 
 
 def _wide_csv_path(soa_id: int) -> str:
@@ -4074,6 +4293,33 @@ def ui_concepts_list(request: Request):
             "rows": rows,
             "count": len(rows),
             "missing_key": subscription_key is None,
+        },
+    )
+
+
+@app.get("/ui/sdtm/specializations", response_class=HTMLResponse)
+def ui_sdtm_specializations_list(request: Request):
+    """Render table listing SDTM dataset specializations (title + API link)."""
+    packages = fetch_sdtm_specializations(force=True) or []
+    rows = [
+        {"title": p.get("title") or "(untitled)", "href": p.get("href")}
+        for p in packages
+    ]
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or _get_cdisc_api_key()
+    # Diagnostics from cache for visibility when no data appears
+    last_status = _sdtm_specializations_cache.get("last_status")
+    last_error = _sdtm_specializations_cache.get("last_error")
+    last_url = _sdtm_specializations_cache.get("last_url")
+    return templates.TemplateResponse(
+        "sdtm_specializations.html",
+        {
+            "request": request,
+            "rows": rows,
+            "count": len(rows),
+            "missing_key": subscription_key is None,
+            "last_status": last_status,
+            "last_error": last_error,
+            "last_url": last_url,
         },
     )
 

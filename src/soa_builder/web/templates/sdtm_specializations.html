@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>SDTM Dataset Specializations (<span id="specTotal">{{ count }}</span>)</h2>
+<p>Data sourced from CDISC Library endpoint <code>/mdr/specializations/sdtm/datasetspecializations</code>. Raw API links may require headers (<code>Ocp-Apim-Subscription-Key</code>{% if not missing_key %}, <code>Authorization: Bearer &lt;key&gt;</code>{% endif %}).</p>
+{% if last_error %}
+<div style="padding:0.5em;margin:0.5em 0;border:1px solid #c33;background:#fee;color:#900;font-size:0.9em;">
+  <strong>Fetch diagnostics:</strong> Status {{ last_status }}{% if last_url %} from <code>{{ last_url }}</code>{% endif %}.<br/>
+  Error: {{ last_error }}<br/>
+  {% if missing_key %}<em>No API key detected; set CDISC_SUBSCRIPTION_KEY or CDISC_API_KEY environment variable.</em>{% endif %}
+</div>
+{% elif missing_key %}
+<div style="padding:0.5em;margin:0.5em 0;border:1px solid #cc9;background:#ffd;color:#660;font-size:0.9em;">
+  <strong>Notice:</strong> No API key provided; response may be empty or unauthorized. Set <code>CDISC_SUBSCRIPTION_KEY</code> or <code>CDISC_API_KEY</code>.
+</div>
+{% endif %}
+<div style="margin:0.5em 0 1em;">
+  <label for="specSearch"><strong>Search:</strong></label>
+  <input id="specSearch" type="text" placeholder="Filter specializations..." style="width:300px;" oninput="filterSpecs()" />
+  <span id="searchCount" style="margin-left:1em;color:#555;"></span>
+  <form action="/ui/sdtm/specializations/refresh" method="post" style="display:inline;margin-left:1em;">
+    <button type="submit" style="padding:0.25em 0.6em;">Refresh</button>
+  </form>
+  <a href="/sdtm/specializations/status" target="_blank" style="margin-left:0.75em;">Status JSON</a>
+</div>
+{% if rows and rows|length > 0 %}
+<table border="1" cellspacing="0" cellpadding="4" id="specTable">
+  <thead>
+    <tr>
+      <th style="text-align:left;">Title</th>
+      <th style="text-align:left;">API</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.title }}</td>
+      <td>{% if r.href %}<a href="{{ r.href }}" target="_blank" rel="noopener">Link</a>{% else %}<em>n/a</em>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<script>
+function filterSpecs(){
+  const q = document.getElementById('specSearch').value.toLowerCase();
+  const rows = document.querySelectorAll('#specTable tbody tr');
+  let visible = 0;
+  rows.forEach(tr => {
+    const text = tr.innerText.toLowerCase();
+    if(!q || text.indexOf(q) !== -1){
+      tr.style.display='';
+      visible++;
+    } else {
+      tr.style.display='none';
+    }
+  });
+  const sc = document.getElementById('searchCount');
+  if(q){
+    sc.textContent = visible + ' match' + (visible===1?'':'es');
+  } else {
+    sc.textContent='';
+  }
+}
+</script>
+{% else %}
+  <p><em>No SDTM dataset specializations available.</em></p>
+  <p style="font-size:0.85em; color:#555;">Troubleshooting tips:
+    <ul style="margin-top:0.3em;">
+      <li>Verify API key env (<code>CDISC_SUBSCRIPTION_KEY</code> or <code>CDISC_API_KEY</code>).</li>
+  <li>If testing offline, export <code>CDISC_SDTM_SPECIALIZATIONS_JSON</code> with sample JSON including <code>datasetSpecializations</code>.</li>
+      <li>Confirm network access to the CDISC Library domain.</li>
+    </ul>
+  </p>
+{% endif %}
+<p><a href="/">Return Home</a></p>
+{% endblock %}
