@@ -22,7 +22,7 @@ projectInfo:
   logoUrl: images/CDISC-360i-Logo.png
 detailedDescription:
   problem: >-
-    An easy-to-use utility with user interface does not exist for the creation of a study schedule of activties. This 
+    An easy-to-use utility with user interface does not exist for the creation of a study schedule of activities. This 
     interface must allow the creation of an encounter matrix with the linking of CDISC Biomedical Concepts with the 
     activities to support the export of valid, standard-conformant USDM v4.0.
   solution: |- 
