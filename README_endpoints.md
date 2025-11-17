@@ -375,7 +375,7 @@ curl -s --get 'http://localhost:8000/protocol/terminology' \
 curl -s --get 'http://localhost:8000/protocol/terminology/audit/export.csv' \
   --data-urlencode 'start=2025-11-05' \
   --data-urlencode 'end=2025-11-12' > protocol_audit.csv
-\n+# Show dataset_date values (Protocol audit)
+# Show dataset_date values (Protocol audit)
 curl -s --get 'http://localhost:8000/protocol/terminology/audit' | jq '.rows[].dataset_date' | head
 ```
 
