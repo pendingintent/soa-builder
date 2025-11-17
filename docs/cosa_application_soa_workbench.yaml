@@ -35,7 +35,7 @@ detailedDescription:
     its early stages and, by making it open-source, the hope is other developers and volunteers will get involved to help 
     create a more robust solution that adds additional benefits to the industry.
   maintenanceModel: |- 
-    The project is in development and available for branching, forking and contriubution. Issues can be reported in GitHub.
+    The project is in development and available for branching, forking and contribution. Issues can be reported in GitHub.
     Issues are fixed via branching and raising Pull Requests which must be assinged to a Reviewer prior to Merge.
   projectSize: |-
     260MB currently with the expectation the project will grow as the project matures and features are added.
