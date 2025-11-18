@@ -19,8 +19,31 @@ def fetch_biomedical_concepts(force: bool = False):
     if override_json:
         try:
             data = json.loads(override_json)
+            # Normalize data into an iterable list of dicts
+            if isinstance(data, dict):
+                # Common patterns: {'items': [...]}, {'concepts': [...]}, or direct properties
+                candidate_lists = []
+                for key in ["items", "concepts", "data"]:
+                    val = data.get(key)
+                    if isinstance(val, list):
+                        candidate_lists.append(val)
+                if candidate_lists:
+                    iterable = candidate_lists[0]
+                else:
+                    # Fallback: treat dict values; filter only list of dicts or single dicts
+                    vals = []
+                    for v in data.values():
+                        if isinstance(v, list):
+                            vals.extend([x for x in v if isinstance(x, dict)])
+                        elif isinstance(v, dict):
+                            vals.append(v)
+                    iterable = vals
+            elif isinstance(data, list):
+                iterable = data
+            else:
+                iterable = []
             concepts = []
-            for c in data:
+            for c in iterable:
                 if not isinstance(c, dict):
                     continue
                 code = c.get("code") or c.get("concept_code")

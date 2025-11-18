@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import List
 import json
 from datetime import datetime
+import logging
 
 from ..db import _connect
 from ..schemas import ArmCreate, ArmUpdate
@@ -68,10 +69,14 @@ def create_arm(soa_id: int, payload: ArmCreate):
     used_nums = set()
     for uid in existing_uids:
         if uid.startswith("StudyArm_"):
-            try:
-                used_nums.add(int(uid.split("StudyArm_")[-1]))
-            except Exception:
-                pass
+            tail = uid[len("StudyArm_") :]
+            if tail.isdigit():
+                used_nums.add(int(tail))
+            else:
+                logging.getLogger("soa_builder.concepts").warning(
+                    "Invalid arm_uid format encountered (ignored for numbering): %s",
+                    uid,
+                )
     next_n = 1
     while next_n in used_nums:
         next_n += 1
