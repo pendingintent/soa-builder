@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """FastAPI web application for interactive Schedule of Activities creation.
 
 Endpoints:
@@ -11,8 +13,6 @@ Endpoints:
 
 Data persisted in SQLite (file: soa_builder_web.db by default).
 """
-
-from __future__ import annotations
 
 import os
 import sqlite3
@@ -72,6 +72,36 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 def _connect():
     return sqlite3.connect(DB_PATH)
+
+
+def _migrate_copy_cell_data():
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        # Check if both tables exist
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cell'")
+        cell_exists = cur.fetchone() is not None
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='matrix_cells'"
+        )
+        matrix_exists = cur.fetchone() is not None
+        if not (cell_exists and matrix_exists):
+            conn.close()
+            return
+        # Only copy if matrix_cells is empty
+        cur.execute("SELECT COUNT(*) FROM matrix_cells")
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return
+        # Copy data
+        cur.execute(
+            "INSERT INTO matrix_cells (soa_id, visit_id, activity_id, status) SELECT soa_id, visit_id, activity_id, status FROM cell"
+        )
+        conn.commit()
+        logger.info("Copied data from 'cell' to 'matrix_cells'")
+        conn.close()
+    except Exception as e:
+        logger.warning("cell->matrix_cells data copy error: %s", e)
 
 
 def _init_db():
@@ -178,8 +208,9 @@ def _init_db():
     cur.execute(
         """CREATE TABLE IF NOT EXISTS epoch (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, name TEXT, order_index INTEGER)"""
     )
+    # Matrix cells table (renamed from legacy 'cell')
     cur.execute(
-        """CREATE TABLE IF NOT EXISTS cell (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, visit_id INTEGER, activity_id INTEGER, status TEXT)"""
+        """CREATE TABLE IF NOT EXISTS matrix_cells (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, visit_id INTEGER, activity_id INTEGER, status TEXT)"""
     )
     # Mapping table linking activities to biomedical concepts (concept_code + title stored for snapshot purposes)
     cur.execute(
@@ -630,6 +661,43 @@ def _migrate_element_table():
 
 
 _migrate_element_table()
+
+
+# --------------------- Migration: rename legacy 'cell' table to 'matrix_cells' ---------------------
+def _migrate_rename_cell_table():
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        # If new table already exists nothing to do
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='matrix_cells'"
+        )
+        if cur.fetchone():
+            conn.close()
+            return
+        # If legacy table exists rename it
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cell'")
+        if cur.fetchone():
+            try:
+                cur.execute("ALTER TABLE cell RENAME TO matrix_cells")
+                conn.commit()
+                logger.info("Renamed legacy table 'cell' to 'matrix_cells'")
+            except Exception as e:  # pragma: no cover
+                logger.warning("Failed renaming cell table: %s", e)
+        else:
+            # Create fresh matrix_cells if neither present (defensive)
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS matrix_cells (id INTEGER PRIMARY KEY AUTOINCREMENT, soa_id INTEGER, visit_id INTEGER, activity_id INTEGER, status TEXT)"""
+            )
+            conn.commit()
+            logger.info("Created matrix_cells table (no prior cell table found)")
+        conn.close()
+    except Exception as e:  # pragma: no cover
+        logger.warning("cell->matrix_cells migration error: %s", e)
+
+
+_migrate_rename_cell_table()
+_migrate_copy_cell_data()
 
 
 # --------------------- Migration: ensure element_id column with unique StudyElement_<n> values ---------------------
@@ -1483,7 +1551,7 @@ def _rollback_freeze(soa_id: int, freeze_id: int) -> dict:
     cur = conn.cursor()
     # Clear existing
     # Order matters: delete cells, then concepts (while activity rows still exist), then activities, then visits.
-    cur.execute("DELETE FROM cell WHERE soa_id=?", (soa_id,))
+    cur.execute("DELETE FROM matrix_cells WHERE soa_id=?", (soa_id,))
     cur.execute(
         "DELETE FROM activity_concept WHERE activity_id IN (SELECT id FROM activity WHERE soa_id=? )",
         (soa_id,),
@@ -1526,7 +1594,7 @@ def _rollback_freeze(soa_id: int, freeze_id: int) -> dict:
         aid = activity_id_map.get(old_aid)
         if vid and aid:
             cur.execute(
-                "INSERT INTO cell (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
+                "INSERT INTO matrix_cells (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
                 (soa_id, vid, aid, status),
             )
             inserted_cells += 1
@@ -1773,7 +1841,8 @@ def _fetch_matrix(soa_id: int):
     )
     activities = [dict(id=r[0], name=r[1], order_index=r[2]) for r in cur.fetchall()]
     cur.execute(
-        "SELECT visit_id, activity_id, status FROM cell WHERE soa_id=?", (soa_id,)
+        "SELECT visit_id, activity_id, status FROM matrix_cells WHERE soa_id=?",
+        (soa_id,),
     )
     cells = [dict(visit_id=r[0], activity_id=r[1], status=r[2]) for r in cur.fetchall()]
     conn.close()
@@ -2597,14 +2666,14 @@ def set_cell(soa_id: int, payload: CellCreate):
     cur = conn.cursor()
     # Upsert semantics: find existing
     cur.execute(
-        "SELECT id FROM cell WHERE soa_id=? AND visit_id=? AND activity_id=?",
+        "SELECT id FROM matrix_cells WHERE soa_id=? AND visit_id=? AND activity_id=?",
         (soa_id, payload.visit_id, payload.activity_id),
     )
     row = cur.fetchone()
     # If blank status => delete existing cell (clear) and do not create new row
     if payload.status.strip() == "":
         if row:
-            cur.execute("DELETE FROM cell WHERE id=?", (row[0],))
+            cur.execute("DELETE FROM matrix_cells WHERE id=?", (row[0],))
             cid = row[0]
             conn.commit()
             conn.close()
@@ -2616,7 +2685,7 @@ def set_cell(soa_id: int, payload: CellCreate):
         cid = row[0]
     else:
         cur.execute(
-            "INSERT INTO cell (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
+            "INSERT INTO matrix_cells (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
             (soa_id, payload.visit_id, payload.activity_id, payload.status),
         )
         cid = cur.lastrowid
@@ -3053,7 +3122,7 @@ def import_matrix(soa_id: int, payload: MatrixImport):
     conn = _connect()
     cur = conn.cursor()
     if payload.reset:
-        cur.execute("DELETE FROM cell WHERE soa_id=?", (soa_id,))
+        cur.execute("DELETE FROM matrix_cells WHERE soa_id=?", (soa_id,))
         cur.execute("DELETE FROM visit WHERE soa_id=?", (soa_id,))
         cur.execute("DELETE FROM activity WHERE soa_id=?", (soa_id,))
     # Insert visits respecting order
@@ -3091,7 +3160,7 @@ def import_matrix(soa_id: int, payload: MatrixImport):
                 continue
             vid = visit_id_map[v_idx]
             cur.execute(
-                "INSERT INTO cell (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
+                "INSERT INTO matrix_cells (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
                 (soa_id, vid, aid, status_str),
             )
     conn.commit()
@@ -3158,7 +3227,9 @@ def delete_visit(soa_id: int, visit_id: int):
             "order_index": b[3],
             "epoch_id": b[4],
         }
-    cur.execute("DELETE FROM cell WHERE soa_id=? AND visit_id=?", (soa_id, visit_id))
+    cur.execute(
+        "DELETE FROM matrix_cells WHERE soa_id=? AND visit_id=?", (soa_id, visit_id)
+    )
     cur.execute("DELETE FROM visit WHERE id=?", (visit_id,))
     conn.commit()
     conn.close()
@@ -3186,7 +3257,8 @@ def delete_activity(soa_id: int, activity_id: int):
     if b:
         before = {"id": b[0], "name": b[1], "order_index": b[2]}
     cur.execute(
-        "DELETE FROM cell WHERE soa_id=? AND activity_id=?", (soa_id, activity_id)
+        "DELETE FROM matrix_cells WHERE soa_id=? AND activity_id=?",
+        (soa_id, activity_id),
     )
     cur.execute("DELETE FROM activity WHERE id=?", (activity_id,))
     conn.commit()
@@ -3267,7 +3339,8 @@ def ui_add_activity(request: Request, soa_id: int, name: str = Form(...)):
     nm = (name or "").strip()
     if not nm:
         raise HTTPException(400, "Name required")
-    conn = _connect(); cur = conn.cursor()
+    conn = _connect()
+    cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM activity WHERE soa_id=?", (soa_id,))
     order_index = cur.fetchone()[0] + 1
     cur.execute(
@@ -3275,7 +3348,8 @@ def ui_add_activity(request: Request, soa_id: int, name: str = Form(...)):
         (soa_id, nm, order_index, f"Activity_{order_index}"),
     )
     aid = cur.lastrowid
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
     _record_activity_audit(
         soa_id,
         "create",
@@ -4257,26 +4331,26 @@ def ui_toggle_cell(
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
-        "SELECT status,id FROM cell WHERE soa_id=? AND visit_id=? AND activity_id=?",
+        "SELECT status,id FROM matrix_cells WHERE soa_id=? AND visit_id=? AND activity_id=?",
         (soa_id, visit_id, activity_id),
     )
     row = cur.fetchone()
     if row and row[0] == "X":
         # clear
-        cur.execute("DELETE FROM cell WHERE id=?", (row[1],))
+        cur.execute("DELETE FROM matrix_cells WHERE id=?", (row[1],))
         conn.commit()
         conn.close()
         current = ""
     elif row:
         # Any non-blank treated as blank visually, remove
-        cur.execute("DELETE FROM cell WHERE id=?", (row[1],))
+        cur.execute("DELETE FROM matrix_cells WHERE id=?", (row[1],))
         conn.commit()
         conn.close()
         current = ""
     else:
         # create X
         cur.execute(
-            "INSERT INTO cell (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
+            "INSERT INTO matrix_cells (soa_id, visit_id, activity_id, status) VALUES (?,?,?,?)",
             (soa_id, visit_id, activity_id, "X"),
         )
         conn.commit()

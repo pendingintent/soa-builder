@@ -49,20 +49,20 @@ def test_matrix_import_endpoint():
     data = resp.json()
     assert data["visits_added"] == 3
     assert data["activities_added"] == 3
-    # cells: Hematology (3 non-empty), Chemistry (1), ECG (2) => 6
+    # matrix_cells: Hematology (3 non-empty), Chemistry (1), ECG (2) => 6
     assert data["cells_inserted"] == 6
     # verify matrix fetch
     m = client.get(f"/soa/{soa_id}/matrix").json()
     assert len(m["visits"]) == 3
     assert len(m["activities"]) == 3
-    # Ensure a specific cell present (C1D15, Hematology -> O)
-    # Need to map visit/activity names to ids then check cell list
+    # Ensure a specific matrix_cell present (C1D15, Hematology -> O)
+    # Need to map visit/activity names to ids then check matrix_cell list
     visit_map = {v["name"]: v["id"] for v in m["visits"]}
     activity_map = {a["name"]: a["id"] for a in m["activities"]}
-    target_cells = [
+    target_matrix_cells = [
         c
         for c in m["cells"]
         if c["visit_id"] == visit_map["C1D15"]
         and c["activity_id"] == activity_map["Hematology"]
     ]
-    assert target_cells and target_cells[0]["status"] == "O"
+    assert target_matrix_cells and target_matrix_cells[0]["status"] == "O"

@@ -30,7 +30,7 @@ def test_create_and_normalize_flow():
     ra = client.post(f"/soa/{soa_id}/activities", json={"name": "Hematology"})
     assert ra.status_code == 200
     activity_id = ra.json()["activity_id"]
-    # set cell
+    # set matrix_cell
     rc = client.post(
         f"/soa/{soa_id}/cells",
         json={"visit_id": visit_id, "activity_id": activity_id, "status": "X"},
