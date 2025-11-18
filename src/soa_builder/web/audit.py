@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from .db import _connect
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger("soa_builder.concepts")
 
@@ -64,8 +64,8 @@ def _record_element_audit(
 def _record_reorder_audit(
     soa_id: int,
     entity_type: str,
-    old_order: list[int],
-    new_order: list[int],
+    old_order: List[int],
+    new_order: List[int],
 ):
     try:
         conn = _connect()
@@ -89,7 +89,7 @@ def _record_reorder_audit(
 def _record_visit_audit(
     soa_id: int,
     action: str,
-    visit_id: int | None,
+    visit_id: Optional[int],
     before: Optional[Dict[str, Any]] = None,
     after: Optional[Dict[str, Any]] = None,
 ):
@@ -116,7 +116,7 @@ def _record_visit_audit(
 def _record_activity_audit(
     soa_id: int,
     action: str,
-    activity_id: int | None,
+    activity_id: Optional[int],
     before: Optional[Dict[str, Any]] = None,
     after: Optional[Dict[str, Any]] = None,
 ):
