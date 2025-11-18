@@ -3260,6 +3260,37 @@ def ui_index(request: Request):
     )
 
 
+@app.post("/ui/soa/{soa_id}/add_activity", response_class=HTMLResponse)
+def ui_add_activity(request: Request, soa_id: int, name: str = Form(...)):
+    if not _soa_exists(soa_id):
+        raise HTTPException(404, "SOA not found")
+    nm = (name or "").strip()
+    if not nm:
+        raise HTTPException(400, "Name required")
+    conn = _connect(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM activity WHERE soa_id=?", (soa_id,))
+    order_index = cur.fetchone()[0] + 1
+    cur.execute(
+        "INSERT INTO activity (soa_id,name,order_index,activity_uid) VALUES (?,?,?,?)",
+        (soa_id, nm, order_index, f"Activity_{order_index}"),
+    )
+    aid = cur.lastrowid
+    conn.commit(); conn.close()
+    _record_activity_audit(
+        soa_id,
+        "create",
+        aid,
+        before=None,
+        after={
+            "id": aid,
+            "name": nm,
+            "order_index": order_index,
+            "activity_uid": f"Activity_{order_index}",
+        },
+    )
+    return HTMLResponse(f"<script>window.location='/ui/soa/{soa_id}/edit';</script>")
+
+
 @app.post("/ui/soa/create", response_class=HTMLResponse)
 def ui_create_soa(
     request: Request,
