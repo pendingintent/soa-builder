@@ -6,6 +6,7 @@ Author: Pending Intent
 License: Proprietary
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: pandas>=2.0.0
 Requires-Dist: click>=8.1.0
 Requires-Dist: fastapi>=0.110.0
@@ -19,6 +20,7 @@ Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: ruff>=0.5.0; extra == "dev"
 Requires-Dist: black>=24.0.0; extra == "dev"
 Requires-Dist: detect-secrets>=1.4.0; extra == "dev"
+Dynamic: license-file
 
 # SoA Builder (Normalization, Expansion & Validation)
 
@@ -140,7 +142,7 @@ pytest
 - Console script entry point publication via `pyproject.toml`
 - Enriched rule grammar (e.g. conditional frequency changes)
 - SDTM domain mapping utilities
- - Web application for interactive SoA authoring (initial FastAPI scaffold added)
+ - Web application for interactive SoA authoring (FastAPI + HTMX) extended with biomedical concept browsing and stable activity UIDs
 
 ## Assumptions & Heuristics
 - All non-first header columns are considered visits.
@@ -157,6 +159,8 @@ pytest
 
 ## Web Application (Experimental)
 An initial FastAPI backend (`soa_builder.web.app`) allows creating an SoA interactively via REST:
+
+> Full, continuously updated endpoint reference (including Elements, freezes, audits, JSON CRUD and UI helpers) lives in `README_endpoints.md`. Consult that file for detailed request/response examples, curl snippets, and future enhancement notes.
 
 Endpoints:
 - POST /soa {"name": "Breast Cancer Phase 2"}
@@ -217,6 +221,21 @@ HTML UI:
  - Use export buttons (to be added) or hit endpoints directly for XLSX/PDF output.
  - Delete a visit or activity using the ✕ button next to its name (confirmation dialog). Deletion cascades to associated cells and automatically reorders remaining items.
  - (Upcoming) Bulk add activities and matrix import could be surfaced via a textarea or JSON upload panel.
+ - View biomedical concepts via the "Concepts" navigation link (`GET /ui/concepts`): renders a table of concept codes, titles and API links (cached; force refresh per study using `POST /ui/soa/{id}/concepts_refresh`).
+
+Activity Identifiers:
+- Each activity now has a stable `activity_uid` (format `Activity_<n>` unique within a study) maintained during reorder using a two-phase temporary renaming to avoid uniqueness collisions.
+- Unique index `(soa_id, activity_uid)` enforces stability for exports, snapshots and audit trails.
+ 
+Biomedical Concepts API Access:
+- The concepts list and detail pages call the CDISC Library API.
+- Set one (or both) of: `CDISC_SUBSCRIPTION_KEY`, `CDISC_API_KEY`.
+- The server will send all of these headers when possible:
+	- `Ocp-Apim-Subscription-Key: <key>`
+	- `Authorization: Bearer <key>` (when `CDISC_API_KEY` provided)
+	- `api-key: <key>` (legacy fallback)
+- If only one key is defined it is reused across header variants.
+- Directly opening the API URL in the browser will 401 because the browser does not attach the required headers; use the internal detail page or an API client (curl/Postman) with the headers above.
 
 Notes:
 - HTMX is loaded via CDN; no build step required.
