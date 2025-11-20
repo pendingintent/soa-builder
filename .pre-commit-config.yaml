@@ -1,0 +1,23 @@
+repos:
+  # Optional: standard formatting/lint hooks
+  - repo: https://github.com/psf/black
+    rev: 24.8.0
+    hooks:
+      - id: black
+
+  # Local hooks for tests/lint
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Run pytest
+        entry: pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      # optional: reuse same flake8 config as GitHub Actions
+      - id: flake8
+        name: Run flake8
+        entry: flake8 src/soa_builder tests/
+        language: system
+        pass_filenames: false

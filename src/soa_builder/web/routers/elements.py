@@ -1,13 +1,13 @@
+import json
+from datetime import datetime, timezone
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from typing import List, Optional
-from datetime import datetime, timezone
-import json
 
-from ..db import _connect
 from ..audit import _record_element_audit
+from ..db import _connect
 from ..schemas import ElementCreate, ElementUpdate
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/soa/{soa_id}")
 

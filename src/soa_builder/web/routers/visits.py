@@ -1,11 +1,10 @@
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timezone
 
+from ..audit import _record_reorder_audit, _record_visit_audit
 from ..db import _connect
-from ..audit import _record_visit_audit, _record_reorder_audit
 from ..schemas import VisitCreate, VisitUpdate
 
 router = APIRouter(prefix="/soa/{soa_id}")

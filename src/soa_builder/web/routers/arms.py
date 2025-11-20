@@ -1,13 +1,12 @@
+import logging
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from typing import List
-import json
-from datetime import datetime
-import logging
 
+from ..audit import _record_arm_audit, _record_reorder_audit
 from ..db import _connect
 from ..schemas import ArmCreate, ArmUpdate
-from ..audit import _record_arm_audit, _record_reorder_audit
 
 router = APIRouter(prefix="/soa/{soa_id}")
 

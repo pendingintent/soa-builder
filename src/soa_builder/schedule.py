@@ -6,11 +6,12 @@ Features:
 """
 
 from __future__ import annotations
+
+import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import re
-import logging
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 WEEK = 7
 logger = logging.getLogger(__name__)

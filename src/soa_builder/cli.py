@@ -12,9 +12,15 @@ Usage examples:
 """
 
 from __future__ import annotations
-import csv, os, sys, json, logging
+
+import csv
+import json
+import logging
+import os
+import sys
 from datetime import datetime
 from typing import List, Optional
+
 import click
 
 from .normalization import normalize_soa

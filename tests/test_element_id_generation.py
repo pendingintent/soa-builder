@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
-from soa_builder.web.app import app, _connect
-import re
+
+from soa_builder.web.app import _connect, app
 
 client = TestClient(app)
 PREFIX = "StudyElement_"

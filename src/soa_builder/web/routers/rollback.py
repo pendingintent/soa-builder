@@ -1,8 +1,11 @@
-import os, sqlite3, json, io, pandas as pd
+import io
+import os
+
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from datetime import datetime, timezone
+
 from ..db import _connect
 
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")

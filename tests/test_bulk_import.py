@@ -1,8 +1,6 @@
 from fastapi.testclient import TestClient
-from soa_builder.web.app import app, DB_PATH
-import os
-from importlib import reload
-import soa_builder.web.app as webapp
+
+from soa_builder.web.app import app
 
 client = TestClient(app)
 

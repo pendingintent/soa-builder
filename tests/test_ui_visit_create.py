@@ -1,6 +1,6 @@
-import re
 from fastapi.testclient import TestClient
-from soa_builder.web.app import app, _connect, DB_PATH
+
+from soa_builder.web.app import _connect, app
 
 client = TestClient(app)
 

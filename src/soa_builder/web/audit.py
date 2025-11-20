@@ -1,8 +1,9 @@
 import json
-from datetime import datetime, timezone
-from .db import _connect
 import logging
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from .db import _connect
 
 logger = logging.getLogger("soa_builder.concepts")
 

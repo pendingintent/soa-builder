@@ -1,9 +1,10 @@
 """Validation utilities for Schedule of Activities."""
 
 from __future__ import annotations
-from dataclasses import dataclass
+
 import re
-from typing import List, Tuple, Dict
+from dataclasses import dataclass
+from typing import Dict, List
 
 WEEK = 7
 

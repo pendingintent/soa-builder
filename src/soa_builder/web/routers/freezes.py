@@ -1,9 +1,10 @@
-import os, sqlite3, json
-from fastapi import APIRouter, HTTPException, Form, Request
+import json
+import os
+import sqlite3
+
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from typing import Optional
-from datetime import datetime, timezone
 
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
@@ -101,7 +102,7 @@ def ui_freeze_diff(request: Request, soa_id: int, left: int, right: int, full: i
     "/ui/soa/{soa_id}/freeze/{freeze_id}/rollback", response_class=HTMLResponse
 )
 def ui_freeze_rollback(request: Request, soa_id: int, freeze_id: int):
-    from ..app import _rollback_freeze, _record_rollback_audit  # type: ignore
+    from ..app import _record_rollback_audit, _rollback_freeze  # type: ignore
 
     result = _rollback_freeze(soa_id, freeze_id)
     _record_rollback_audit(
@@ -124,7 +125,7 @@ def ui_freeze_rollback(request: Request, soa_id: int, freeze_id: int):
     "/ui/soa/{soa_id}/freeze/{freeze_id}/rollback_preview", response_class=HTMLResponse
 )
 def ui_freeze_rollback_preview(request: Request, soa_id: int, freeze_id: int):
-    from ..app import _rollback_preview, _get_freeze  # type: ignore
+    from ..app import _get_freeze, _rollback_preview  # type: ignore
 
     preview = _rollback_preview(soa_id, freeze_id)
     freeze = _get_freeze(soa_id, freeze_id)

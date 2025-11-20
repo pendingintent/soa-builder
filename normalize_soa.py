@@ -32,13 +32,14 @@ Enhancements (future):
 - Add endpoints linkage and CRF page mapping.
 """
 from __future__ import annotations
+
 import argparse
 import csv
 import os
 import re
 import sys
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 
 try:
     import pandas as pd  # type: ignore
@@ -50,6 +51,7 @@ WINDOW_RANGE_RE = re.compile(r"\(([-+]?\d+)\s*to\s*([-+]?\d+)d\)")
 WINDOW_PM_RE = re.compile(r"\((?:±|\+/-)(\d+)d\)")
 DAY_PM_RE = re.compile(r"(\d+)±(\d+)d")
 PM_SYMBOL_RE = re.compile(r"±(\d+)d")
+
 
 @dataclass
 class Visit:
@@ -63,10 +65,12 @@ class Visit:
     repeat_pattern: Optional[str]
     category: Optional[str]
 
+
 @dataclass
 class Activity:
     activity_id: int
     activity_name: str
+
 
 @dataclass
 class VisitActivity:
@@ -77,10 +81,12 @@ class VisitActivity:
     required_flag: int
     conditional_flag: int
 
+
 @dataclass
 class ActivityCategory:
     activity_id: int
     category: str
+
 
 @dataclass
 class ScheduleRule:
@@ -92,20 +98,16 @@ class ScheduleRule:
     visit_id: Optional[int]
     raw_text: str
 
+
 CATEGORY_KEYWORDS = {
-    'screening': ['screening'],
-    'baseline': ['baseline', 'day 1'],
-    'treatment': ['cycle', 'week', 'day'],
-    'follow_up': ['follow', 'fu', 'survival', 'safety'],
-    'eot': ['end of treatment', 'eot']
+    "screening": ["screening"],
+    "baseline": ["baseline", "day 1"],
+    "treatment": ["cycle", "week", "day"],
+    "follow_up": ["follow", "fu", "survival", "safety"],
+    "eot": ["end of treatment", "eot"],
 }
 
-REPEAT_PATTERNS = [
-    'every 2 cycles',
-    'q12w',
-    'q3w',
-    'every 12 weeks'
-]
+REPEAT_PATTERNS = ["every 2 cycles", "q12w", "q3w", "every 12 weeks"]
 
 
 def classify_visit(header: str) -> Optional[str]:
@@ -158,34 +160,62 @@ def detect_repeat_pattern(cell_value: str) -> Optional[str]:
             return pat
     return None
 
+
 ACTIVITY_CATEGORY_KEYWORDS = {
-    'labs': ['hematology', 'cbc', 'chemistry', 'cmp', 'urinalysis', 'tumor markers'],
-    'imaging': ['imaging', 'ct/mri', 'mri', 'brain mri'],
-    'dosing': ['study drug administration', 'dose modifications', 'premedication', 'drug accountability'],
-    'admin': ['informed consent', 'randomization', 'concomitant medications', 'demographics', 'height', 'weight', 'pregnancy test'],
-    'safety': ['vital signs', 'ecg', 'echocardiogram', 'muga', 'adverse event', 'physical exam'],
-    'pharmacokinetics': ['pharmacokinetics', 'pk'],
-    'pathology': ['tumor tissue', 'biopsy', 'archival tumor tissue', 'baseline biopsy', 'on-treatment biopsy'],
-    'patient_reported': ['patient-reported', 'eortc'],
-    'performance_status': ['ecog'],
-    'drug_accountability': ['drug accountability'],
-    'adverse_event': ['adverse event assessment'],
+    "labs": ["hematology", "cbc", "chemistry", "cmp", "urinalysis", "tumor markers"],
+    "imaging": ["imaging", "ct/mri", "mri", "brain mri"],
+    "dosing": [
+        "study drug administration",
+        "dose modifications",
+        "premedication",
+        "drug accountability",
+    ],
+    "admin": [
+        "informed consent",
+        "randomization",
+        "concomitant medications",
+        "demographics",
+        "height",
+        "weight",
+        "pregnancy test",
+    ],
+    "safety": [
+        "vital signs",
+        "ecg",
+        "echocardiogram",
+        "muga",
+        "adverse event",
+        "physical exam",
+    ],
+    "pharmacokinetics": ["pharmacokinetics", "pk"],
+    "pathology": [
+        "tumor tissue",
+        "biopsy",
+        "archival tumor tissue",
+        "baseline biopsy",
+        "on-treatment biopsy",
+    ],
+    "patient_reported": ["patient-reported", "eortc"],
+    "performance_status": ["ecog"],
+    "drug_accountability": ["drug accountability"],
+    "adverse_event": ["adverse event assessment"],
 }
+
 
 def classify_activity(name: str) -> str:
     n = name.lower()
     for cat, toks in ACTIVITY_CATEGORY_KEYWORDS.items():
         if any(t in n for t in toks):
             return cat
-    return 'other'
+    return "other"
 
 
 def load_csv(path: str) -> tuple[List[str], List[List[str]]]:
-    with open(path, 'r', newline='', encoding='utf-8') as f:
+    with open(path, "r", newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
         rows = list(reader)
     if not rows:
-        raise ValueError('CSV is empty')
+        raise ValueError("CSV is empty")
     header = rows[0]
     data_rows = rows[1:]
     return header, data_rows
@@ -197,17 +227,19 @@ def build_visits(headers: List[str]) -> List[Visit]:
         wl, wu = parse_window(h)
         code = extract_visit_code(h)
         cat = classify_visit(h)
-        visits.append(Visit(
-            visit_id=idx,
-            raw_header=h,
-            visit_name=re.sub(r"\s*\(.*?\)", "", h).strip(),
-            visit_code=code,
-            sequence_index=idx,
-            window_lower=wl,
-            window_upper=wu,
-            repeat_pattern=None,
-            category=cat
-        ))
+        visits.append(
+            Visit(
+                visit_id=idx,
+                raw_header=h,
+                visit_name=re.sub(r"\s*\(.*?\)", "", h).strip(),
+                visit_code=code,
+                sequence_index=idx,
+                window_lower=wl,
+                window_upper=wu,
+                repeat_pattern=None,
+                category=cat,
+            )
+        )
     return visits
 
 
@@ -221,7 +253,9 @@ def build_activities(rows: List[List[str]]) -> List[Activity]:
     return acts
 
 
-def build_visit_activities(rows: List[List[str]], visits: List[Visit]) -> List[VisitActivity]:
+def build_visit_activities(
+    rows: List[List[str]], visits: List[Visit]
+) -> List[VisitActivity]:
     vas: List[VisitActivity] = []
     next_id = 1
     for a_idx, r in enumerate(rows, start=1):
@@ -233,30 +267,42 @@ def build_visit_activities(rows: List[List[str]], visits: List[Visit]) -> List[V
             if not raw:
                 continue
             status = raw
-            required = 1 if raw.startswith('X') else 0
-            conditional = 1 if ('if indicated' in raw.lower() or 'optional' in raw.lower()) else 0
+            required = 1 if raw.startswith("X") else 0
+            conditional = (
+                1 if ("if indicated" in raw.lower() or "optional" in raw.lower()) else 0
+            )
             rep_pat = detect_repeat_pattern(raw)
             if rep_pat and visit.repeat_pattern is None:
                 # annotate visit repeat pattern once
                 visit.repeat_pattern = rep_pat
-            vas.append(VisitActivity(
-                id=next_id,
-                visit_id=visit.visit_id,
-                activity_id=a_idx,
-                status=status,
-                required_flag=required,
-                conditional_flag=conditional
-            ))
+            vas.append(
+                VisitActivity(
+                    id=next_id,
+                    visit_id=visit.visit_id,
+                    activity_id=a_idx,
+                    status=status,
+                    required_flag=required,
+                    conditional_flag=conditional,
+                )
+            )
             next_id += 1
     return vas
+
 
 def build_activity_categories(activities: List[Activity]) -> List[ActivityCategory]:
     cats: List[ActivityCategory] = []
     for a in activities:
-        cats.append(ActivityCategory(activity_id=a.activity_id, category=classify_activity(a.activity_name)))
+        cats.append(
+            ActivityCategory(
+                activity_id=a.activity_id, category=classify_activity(a.activity_name)
+            )
+        )
     return cats
 
-def build_schedule_rules(rows: List[List[str]], visits: List[Visit], activities: List[Activity]) -> List[ScheduleRule]:
+
+def build_schedule_rules(
+    rows: List[List[str]], visits: List[Visit], activities: List[Activity]
+) -> List[ScheduleRule]:
     rules: List[ScheduleRule] = []
     rule_id = 1
     # From headers (e.g., Survival FU (q12w))
@@ -264,7 +310,17 @@ def build_schedule_rules(rows: List[List[str]], visits: List[Visit], activities:
         header_lower = v.raw_header.lower()
         for pat in REPEAT_PATTERNS:
             if pat in header_lower:
-                rules.append(ScheduleRule(rule_id=rule_id, pattern=pat, description=f"Visit-level repeating schedule: {pat}", source_type='header', activity_id=None, visit_id=v.visit_id, raw_text=v.raw_header))
+                rules.append(
+                    ScheduleRule(
+                        rule_id=rule_id,
+                        pattern=pat,
+                        description=f"Visit-level repeating schedule: {pat}",
+                        source_type="header",
+                        activity_id=None,
+                        visit_id=v.visit_id,
+                        raw_text=v.raw_header,
+                    )
+                )
                 rule_id += 1
     # From cells
     for a_idx, r in enumerate(rows, start=1):
@@ -276,7 +332,17 @@ def build_schedule_rules(rows: List[List[str]], visits: List[Visit], activities:
                 continue
             pat = detect_repeat_pattern(raw)
             if pat:
-                rules.append(ScheduleRule(rule_id=rule_id, pattern=pat, description=f"Activity-level repeating schedule: {pat}", source_type='cell', activity_id=a_idx, visit_id=visit.visit_id, raw_text=raw))
+                rules.append(
+                    ScheduleRule(
+                        rule_id=rule_id,
+                        pattern=pat,
+                        description=f"Activity-level repeating schedule: {pat}",
+                        source_type="cell",
+                        activity_id=a_idx,
+                        visit_id=visit.visit_id,
+                        raw_text=raw,
+                    )
+                )
                 rule_id += 1
     # De-duplicate by (pattern, source_type, activity_id, visit_id)
     unique = {}
@@ -289,19 +355,27 @@ def build_schedule_rules(rows: List[List[str]], visits: List[Visit], activities:
 
 def write_csv(path: str, rows: List[Dict[str, Any]]):
     if not rows:
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write('')
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("")
         return
     fieldnames = list(rows[0].keys())
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for row in rows:
             w.writerow(row)
 
 
-def to_sqlite(db_path: str, visits: List[Visit], activities: List[Activity], vas: List[VisitActivity], activity_categories: List[ActivityCategory], schedule_rules: List[ScheduleRule]):
+def to_sqlite(
+    db_path: str,
+    visits: List[Visit],
+    activities: List[Activity],
+    vas: List[VisitActivity],
+    activity_categories: List[ActivityCategory],
+    schedule_rules: List[ScheduleRule],
+):
     import sqlite3
+
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     # Drop existing tables to allow re-runs without UNIQUE constraint failures
@@ -310,7 +384,8 @@ def to_sqlite(db_path: str, visits: List[Visit], activities: List[Activity], vas
     cur.execute("DROP TABLE IF EXISTS visit_activities")
     cur.execute("DROP TABLE IF EXISTS activities")
     cur.execute("DROP TABLE IF EXISTS visits")
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS visits (
             visit_id INTEGER PRIMARY KEY,
             raw_header TEXT,
@@ -321,13 +396,17 @@ def to_sqlite(db_path: str, visits: List[Visit], activities: List[Activity], vas
             window_upper INTEGER,
             repeat_pattern TEXT,
             category TEXT
-        )""")
-    cur.execute("""
+        )"""
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS activities (
             activity_id INTEGER PRIMARY KEY,
             activity_name TEXT
-        )""")
-    cur.execute("""
+        )"""
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS visit_activities (
             id INTEGER PRIMARY KEY,
             visit_id INTEGER,
@@ -337,14 +416,18 @@ def to_sqlite(db_path: str, visits: List[Visit], activities: List[Activity], vas
             conditional_flag INTEGER,
             FOREIGN KEY (visit_id) REFERENCES visits(visit_id),
             FOREIGN KEY (activity_id) REFERENCES activities(activity_id)
-        )""")
-    cur.execute("""
+        )"""
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS activity_categories (
             activity_id INTEGER PRIMARY KEY,
             category TEXT,
             FOREIGN KEY (activity_id) REFERENCES activities(activity_id)
-        )""")
-    cur.execute("""
+        )"""
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS schedule_rules (
             rule_id INTEGER PRIMARY KEY,
             pattern TEXT,
@@ -355,21 +438,44 @@ def to_sqlite(db_path: str, visits: List[Visit], activities: List[Activity], vas
             raw_text TEXT,
             FOREIGN KEY (activity_id) REFERENCES activities(activity_id),
             FOREIGN KEY (visit_id) REFERENCES visits(visit_id)
-        )""")
-    cur.executemany("INSERT INTO visits VALUES (?,?,?,?,?,?,?,?,?)", [tuple(asdict(v).values()) for v in visits])
-    cur.executemany("INSERT INTO activities VALUES (?,?)", [tuple(asdict(a).values()) for a in activities])
-    cur.executemany("INSERT INTO visit_activities VALUES (?,?,?,?,?,?)", [tuple(asdict(va).values()) for va in vas])
-    cur.executemany("INSERT INTO activity_categories VALUES (?,?)", [tuple(asdict(c).values()) for c in activity_categories])
-    cur.executemany("INSERT INTO schedule_rules VALUES (?,?,?,?,?,?,?)", [tuple(asdict(r).values()) for r in schedule_rules])
+        )"""
+    )
+    cur.executemany(
+        "INSERT INTO visits VALUES (?,?,?,?,?,?,?,?,?)",
+        [tuple(asdict(v).values()) for v in visits],
+    )
+    cur.executemany(
+        "INSERT INTO activities VALUES (?,?)",
+        [tuple(asdict(a).values()) for a in activities],
+    )
+    cur.executemany(
+        "INSERT INTO visit_activities VALUES (?,?,?,?,?,?)",
+        [tuple(asdict(va).values()) for va in vas],
+    )
+    cur.executemany(
+        "INSERT INTO activity_categories VALUES (?,?)",
+        [tuple(asdict(c).values()) for c in activity_categories],
+    )
+    cur.executemany(
+        "INSERT INTO schedule_rules VALUES (?,?,?,?,?,?,?)",
+        [tuple(asdict(r).values()) for r in schedule_rules],
+    )
     conn.commit()
     conn.close()
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Normalize SoA wide CSV into relational tables")
-    ap.add_argument('--input', required=True, help='Path to wide SoA CSV')
-    ap.add_argument('--out-dir', required=True, help='Directory to write normalized outputs')
-    ap.add_argument('--sqlite', help='Optional path to SQLite DB to create (e.g., normalized/soa.db)')
+    ap = argparse.ArgumentParser(
+        description="Normalize SoA wide CSV into relational tables"
+    )
+    ap.add_argument("--input", required=True, help="Path to wide SoA CSV")
+    ap.add_argument(
+        "--out-dir", required=True, help="Directory to write normalized outputs"
+    )
+    ap.add_argument(
+        "--sqlite",
+        help="Optional path to SQLite DB to create (e.g., normalized/soa.db)",
+    )
     args = ap.parse_args()
 
     header, rows = load_csv(args.input)
@@ -380,20 +486,43 @@ def main():
     schedule_rules = build_schedule_rules(rows, visits, activities)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    write_csv(os.path.join(args.out_dir, 'visits.csv'), [asdict(v) for v in visits])
-    write_csv(os.path.join(args.out_dir, 'activities.csv'), [asdict(a) for a in activities])
-    write_csv(os.path.join(args.out_dir, 'visit_activities.csv'), [asdict(va) for va in visit_activities])
-    write_csv(os.path.join(args.out_dir, 'activity_categories.csv'), [asdict(c) for c in activity_categories])
-    write_csv(os.path.join(args.out_dir, 'schedule_rules.csv'), [asdict(r) for r in schedule_rules])
+    write_csv(os.path.join(args.out_dir, "visits.csv"), [asdict(v) for v in visits])
+    write_csv(
+        os.path.join(args.out_dir, "activities.csv"), [asdict(a) for a in activities]
+    )
+    write_csv(
+        os.path.join(args.out_dir, "visit_activities.csv"),
+        [asdict(va) for va in visit_activities],
+    )
+    write_csv(
+        os.path.join(args.out_dir, "activity_categories.csv"),
+        [asdict(c) for c in activity_categories],
+    )
+    write_csv(
+        os.path.join(args.out_dir, "schedule_rules.csv"),
+        [asdict(r) for r in schedule_rules],
+    )
 
     if args.sqlite:
-        to_sqlite(args.sqlite, visits, activities, visit_activities, activity_categories, schedule_rules)
+        to_sqlite(
+            args.sqlite,
+            visits,
+            activities,
+            visit_activities,
+            activity_categories,
+            schedule_rules,
+        )
 
     # Basic summary
-    print(f"Visits: {len(visits)} | Activities: {len(activities)} | Mappings: {len(visit_activities)} | Categories: {len(activity_categories)} | Rules: {len(schedule_rules)}")
+    print(
+        f"Visits: {len(visits)} | Activities: {len(activities)} | Mappings: {len(visit_activities)} | Categories: {len(activity_categories)} | Rules: {len(schedule_rules)}"
+    )
     # Show sample of first few mappings
     for va in visit_activities[:5]:
-        print(f"VA {va.id}: visit {va.visit_id} activity {va.activity_id} status='{va.status}' required={va.required_flag} conditional={va.conditional_flag}")
+        print(
+            f"VA {va.id}: visit {va.visit_id} activity {va.activity_id} status='{va.status}' required={va.required_flag} conditional={va.conditional_flag}"
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

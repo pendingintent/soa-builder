@@ -1,3 +1,7 @@
+from .normalization import normalize_soa
+from .schedule import expand_schedule_rules
+from .validation import validate_imaging_schedule
+
 """soa_builder package
 
 Modules:
@@ -12,8 +16,6 @@ Public API surface (initial):
 
 Additional utilities are internal; future versions may expose richer models.
 """
-from .normalization import normalize_soa
-from .schedule import expand_schedule_rules
-from .validation import validate_imaging_schedule
+
 
 __all__ = ["normalize_soa", "expand_schedule_rules", "validate_imaging_schedule"]

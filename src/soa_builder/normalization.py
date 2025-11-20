@@ -4,9 +4,13 @@ Expose function normalize_soa(input_csv, out_dir, sqlite_path=None) returning su
 """
 
 from __future__ import annotations
-import csv, os, re, sqlite3
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
+
+import csv
+import os
+import re
+import sqlite3
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 
 VISIT_CODE_RE = re.compile(r"\(([^()]+)\)")
 WINDOW_RANGE_RE = re.compile(r"\(([-+]?\d+)\s*to\s*([-+]?\d+)d\)")

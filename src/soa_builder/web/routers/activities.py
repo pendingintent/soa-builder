@@ -1,15 +1,16 @@
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timezone
-
-from ..db import _connect
-from ..audit import _record_activity_audit, _record_reorder_audit
-from ..schemas import BulkActivities, ActivityCreate, ActivityUpdate
+import json
 
 # Lightweight concept fetcher to avoid circular import with app.py
-import os, json, time
+import os
+import time
+from typing import List
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+
+from ..audit import _record_activity_audit, _record_reorder_audit
+from ..db import _connect
+from ..schemas import ActivityCreate, ActivityUpdate, BulkActivities
 
 _ACT_CONCEPT_CACHE = {"data": None, "fetched_at": 0}
 _ACT_CONCEPT_TTL = 60 * 60

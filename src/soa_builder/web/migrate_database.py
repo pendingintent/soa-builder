@@ -1,10 +1,10 @@
-import sqlite3
-from dotenv import load_dotenv
-import os
 import logging
+import os
 from datetime import datetime, timezone
-from .db import _connect
 
+from dotenv import load_dotenv
+
+from .db import _connect
 
 load_dotenv()
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")
@@ -138,6 +138,7 @@ def _migrate_drop_arm_element_link():
             )
             # Copy data (ignore legacy columns)
             # Only select columns that persist
+            """
             select_cols = [
                 c
                 for c in [
@@ -151,8 +152,9 @@ def _migrate_drop_arm_element_link():
                 ]
                 if c in cols
             ]
+            """
             cur.execute(
-                f"INSERT INTO arm_new (id,soa_id,name,label,description,order_index,arm_uid) SELECT id,soa_id,name,label,description,order_index,arm_uid FROM arm"
+                "INSERT INTO arm_new (id,soa_id,name,label,description,order_index,arm_uid) SELECT id,soa_id,name,label,description,order_index,arm_uid FROM arm"
             )
             # Drop old table, rename
             cur.execute("DROP TABLE arm")

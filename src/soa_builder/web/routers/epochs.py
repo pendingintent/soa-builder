@@ -1,9 +1,12 @@
+import json
+import os
+import sqlite3
+from datetime import datetime, timezone
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional, List, Any
-import sqlite3, os, json
-from datetime import datetime, timezone
+
 from ..schemas import EpochCreate, EpochUpdate
 
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")

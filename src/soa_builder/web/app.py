@@ -14,66 +14,58 @@ Endpoints:
 Data persisted in SQLite (file: soa_builder_web.db by default).
 """
 
-import os
-import sqlite3
 import csv
-import tempfile
+import io
 import json
-from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File, Response
+import logging
+import os
 import re
+import re as _re
+import tempfile
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, List, Optional
+
+import pandas as pd
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
-from contextlib import asynccontextmanager
-import io
-import pandas as pd
+
 from ..normalization import normalize_soa
-import requests, time, logging
-from dotenv import load_dotenv
-import re as _re
-from .schemas import (
-    ArmCreate,
-    ArmUpdate,
-    SOACreate,
-    SOAMetadataUpdate,
-)
 from .initialize_database import _connect, _init_db
 from .migrate_database import (
-    _migrate_add_arm_uid,
-    _migrate_drop_arm_element_link,
-    _migrate_add_epoch_id_to_visit,
-    _migrate_add_epoch_seq,
-    _migrate_add_epoch_label_desc,
-    _migrate_create_code_junction,
-    _migrate_add_study_fields,
+    _backfill_dataset_date,
     _drop_unused_override_table,
+    _migrate_activity_add_uid,
+    _migrate_add_arm_uid,
+    _migrate_add_epoch_id_to_visit,
+    _migrate_add_epoch_label_desc,
+    _migrate_add_epoch_seq,
+    _migrate_add_study_fields,
+    _migrate_arm_add_type_fields,
+    _migrate_copy_cell_data,
+    _migrate_create_code_junction,
+    _migrate_drop_arm_element_link,
+    _migrate_element_id,
     _migrate_element_table,
     _migrate_rename_cell_table,
-    _migrate_copy_cell_data,
-    _migrate_element_id,
     _migrate_rollback_add_elements_restored,
-    _migrate_activity_add_uid,
-    _migrate_arm_add_type_fields,
-    _backfill_dataset_date,
 )
+from .routers import activities as activities_router
 from .routers import arms as arms_router
 from .routers import elements as elements_router
-from .routers import visits as visits_router
-from .routers import activities as activities_router
 from .routers import epochs as epochs_router
 from .routers import freezes as freezes_router
 from .routers import rollback as rollback_router
-from .routers.arms import (
-    list_arms,
-    create_arm,
-    update_arm,
-    delete_arm,
-    reorder_arms_api,
-)  # re-export for backward compatibility
-
+from .routers import visits as visits_router
+from .routers.arms import create_arm  # re-export for backward compatibility
+from .routers.arms import delete_arm, update_arm
+from .schemas import ArmCreate, ArmUpdate, SOACreate, SOAMetadataUpdate
 
 load_dotenv()  # must come BEFORE reading env-based configuration so values are populated
 DB_PATH = os.environ.get("SOA_BUILDER_DB", "soa_builder_web.db")
@@ -2247,7 +2239,7 @@ def export_pdf(soa_id: int):
     else:
         add("  (none)")
     # Pad to ensure size > 800 bytes for tests by repeating summary if short
-    if sum(len(l) for l in lines) < 600:
+    if sum(len(li) for li in lines) < 600:
         add("")
         add("(Additional padding to satisfy size expectations)")
         for _ in range(10):
@@ -2280,12 +2272,12 @@ def export_pdf(soa_id: int):
         "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
     )
     # Combine and build xref
-    offset = len(pdf_parts[0])
-    xref_offsets = [0]  # obj 0 placeholder
+    # offset = len(pdf_parts[0])
+    # xref_offsets = [0]  # obj 0 placeholder
     for obj in objects:
         pdf_parts.append(obj)
     # Recompute offsets by re-building sequentially
-    full_no_xref = "".join(pdf_parts)
+    # full_no_xref = "".join(pdf_parts)
     # Determine each object's offset
     running = 0
     offsets = [0]
@@ -3600,7 +3592,7 @@ def ui_toggle_cell(
         conn.close()
         current = "X"
     # Next status (for hx-vals) depends on current
-    next_status = "X" if current == "" else ""
+    # next_status = "X" if current == "" else ""
     cell_html = f'<td hx-post="/ui/soa/{soa_id}/toggle_cell" hx-vals=\'{{"visit_id": {visit_id}, "activity_id": {activity_id}}}\' hx-swap="outerHTML" class="cell">{current}</td>'
     return HTMLResponse(cell_html)
 
@@ -4107,7 +4099,7 @@ def ui_ddf_upload(
     filename = file.filename or "uploaded.xls"
     if not (filename.lower().endswith(".xls") or filename.lower().endswith(".xlsx")):
         return HTMLResponse(
-            f"<script>window.location='/ui/ddf/terminology?error=Unsupported+file+type';</script>",
+            "<script>window.location='/ui/ddf/terminology?error=Unsupported+file+type';</script>",
             status_code=400,
         )
     try:
@@ -4297,7 +4289,8 @@ def export_ddf_audit_csv(
     source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
 ):
     rows = get_ddf_audit(source=source, start=start, end=end)
-    import csv, io
+    import csv
+    import io
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -4514,7 +4507,7 @@ def admin_load_protocol(
                 400, f"Protocol terminology file not found in candidates: {candidates}"
             )
     try:
-        import hashlib, pathlib
+        import hashlib
 
         with open(fp, "rb") as fh:
             file_hash = hashlib.sha256(fh.read()).hexdigest()
@@ -4668,7 +4661,8 @@ def ui_protocol_upload(
             status_code=400,
         )
     try:
-        import tempfile, hashlib
+        import hashlib
+        import tempfile
 
         suffix = ".xls" if filename.lower().endswith(".xls") else ".xlsx"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -4847,7 +4841,8 @@ def export_protocol_audit_csv(
     source: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None
 ):
     rows = get_protocol_audit(source=source, start=start, end=end)
-    import csv, io
+    import csv
+    import io
 
     buf = io.StringIO()
     writer = csv.writer(buf)

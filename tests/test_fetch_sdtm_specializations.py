@@ -1,8 +1,7 @@
-import os
 import json
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
-from soa_builder.web.app import fetch_sdtm_specializations, _sdtm_specializations_cache
+from soa_builder.web.app import _sdtm_specializations_cache, fetch_sdtm_specializations
 
 
 def test_fetch_sdtm_specializations_env_override(monkeypatch):
