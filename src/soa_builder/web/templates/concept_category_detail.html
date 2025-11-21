@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Biomedical Concepts in Category: {{ category }}</h2>
+<p>Total concepts: <strong>{{ count }}</strong></p>
+
+{% if rows %}
+<table border="1" cellspacing="0" cellpadding="4" id="conceptsTable">
+  <thead>
+    <tr>
+      <th style="text-align:left;">Title</th>
+      <th style="text-align:center;">Biomedical Concept Code</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.title }}</td>
+      <td style="text-align:center;">
+        {% if r.code %}
+          <a href="/ui/concepts/{{ r.code }}">{{ r.code }}</a>
+        {% else %}<em>n/a</em>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p><em>No concepts found for this category.</em></p>
+{% endif %}
+
+<p><a href="/ui/concept_categories">&larr; Back to Categories</a></p>
+{% endblock %}

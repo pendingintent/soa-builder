@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Biomedical Concept Categories (<span id="conceptTotal">{{ count }}</span>)</h2>
+<p>
+  This list is derived from the CDISC Library API. Each link points to the
+  category's API resource (which lists biomedical concepts in that category).
+</p>
+<div style="margin:0.5em 0 1em;">
+  <label for="categorySearch"><strong>Search:</strong></label>
+  <input id="categorySearch" type="text" placeholder="Filter categories..." style="width:280px;" oninput="filterCategories()" />
+  <span id="searchCount" style="margin-left:1em;color:#555;"></span>
+</div>
+
+{% if rows %}
+<table border="1" cellspacing="0" cellpadding="4" id="categoriesTable">
+  <thead>
+    <tr>
+      <th style="text-align:left;">Name</th>
+      <th style="text-align:left;">Title</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>
+        {% if r.name %}
+          <!-- Pass raw name; backend will encode once to avoid double-encoding -->
+          <a href="/ui/concept_categories/view?name={{ r.name }}">{{ r.name }}</a>
+        {% else %}
+          <em>n/a</em>
+        {% endif %}
+      </td>
+      <td>{{ r.title }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<script>
+function filterCategories(){
+  const q = document.getElementById('categorySearch').value.toLowerCase();
+  const rows = document.querySelectorAll('#categoriesTable tbody tr');
+  let visible = 0;
+  rows.forEach(tr => {
+    const text = tr.innerText.toLowerCase();
+    if(!q || text.indexOf(q) !== -1){
+      tr.style.display = '';
+      visible++;
+    } else {
+      tr.style.display = 'none';
+    }
+  });
+  const sc = document.getElementById('searchCount');
+  if(q){
+    sc.textContent = visible + ' match' + (visible === 1 ? '' : 'es');
+  } else {
+    sc.textContent = '';
+  }
+}
+</script>
+{% else %}
+  <p><em>No biomedical concept categories available (empty list).</em></p>
+{% endif %}
+
+<p><a href="/">Return Home</a></p>
+{% endblock %}

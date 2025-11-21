@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import re as _re
+import urllib.parse
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -997,6 +998,217 @@ def _fetch_matrix(soa_id: int):
     cells = [dict(visit_id=r[0], activity_id=r[1], status=r[2]) for r in cur.fetchall()]
     conn.close()
     return visits, activities, cells
+
+
+def fetch_biomedical_concept_categories() -> list[dict]:
+    """Return list of Biomedical Concept Categories from CDISC Library.
+
+    Normalized shape:
+      [{'name': <category_name>, 'title': <title>, 'href': <absolute_href>}]
+    """
+    url = "https://api.library.cdisc.org/api/cosmos/v2/mdr/bc/categories"
+    base_prefix = "https://api.library.cdisc.org/api/cosmos/v2"
+    headers = {"Accept": "application/json"}
+    api_key = _get_cdisc_api_key()
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or api_key
+    # Some CDISC gateways require subscription key header, others accept bearer/api-key; send all when available.
+    if subscription_key:
+        headers["Ocp-Apim-Subscription-Key"] = subscription_key
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"  # bearer token style
+        headers["api-key"] = api_key  # fallback header name
+
+    def _normalize_href(h: Optional[str]) -> Optional[str]:
+        if not h:
+            return None
+        if h.startswith("http://") or h.startswith("https://"):
+            return h
+        if h.startswith("/"):
+            return base_prefix + h
+        return base_prefix + "/" + h
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(
+                "BC categories fetch HTTP %s (snippet=%s)",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return []
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.error("BC categories fetch 200 but non-JSON response")
+            return []
+
+        categories: list[dict] = []
+        if (
+            isinstance(data, dict)
+            and "_links" in data
+            and isinstance(data["_links"], dict)
+        ):
+            cat_list = data["_links"].get("categories") or []
+            if isinstance(cat_list, list):
+                for cat in cat_list:
+                    if not isinstance(cat, dict):
+                        continue
+                    name = cat.get("name")
+                    self_link = (cat.get("_links", {}) or {}).get("self") or {}
+                    if not isinstance(self_link, dict):
+                        self_link = {}
+                    href = _normalize_href(self_link.get("href"))
+                    title = self_link.get("title") or cat.get("label") or name or href
+                    if name and href:
+                        categories.append(
+                            {
+                                "name": str(name),
+                                "title": str(title or name),
+                                "href": href,
+                            }
+                        )
+        categories.sort(key=lambda c: (c["title"] or "").lower())
+        logger.info("Fetched %d BC categories from remote API", len(categories))
+        return categories
+    except Exception as e:  # pragma: no cover
+        logger.error("BC categories fetch error: %s", e)
+        return []
+
+
+def fetch_biomedical_concepts_by_category(name: str) -> list[dict]:
+    """Return biomedical concepts for a given category name.
+
+    Uses category-specific endpoint: /mdr/bc/biomedicalconcepts?category=<name>
+    Normalized list of dicts: {'code': <code>, 'title': <title>, 'href': <absolute_href>}
+    Errors yield empty list; logs diagnostic info.
+    """
+    if not name or not name.strip():
+        return []
+    category = name.strip()
+    base_prefix = "https://api.library.cdisc.org/api/cosmos/v2"
+    # Deterministic single encoding: unquote once then re-encode
+    decoded_once = urllib.parse.unquote(category)
+    encoded = requests.utils.quote(decoded_once, safe="")
+    url = f"{base_prefix}/mdr/bc/biomedicalconcepts?category={encoded}"
+    headers = {"Accept": "application/json"}
+    api_key = _get_cdisc_api_key()
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or api_key
+    if subscription_key:
+        headers["Ocp-Apim-Subscription-Key"] = subscription_key
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["api-key"] = api_key
+
+    def _normalize_href(h: Optional[str]) -> Optional[str]:
+        if not h:
+            return None
+        if h.startswith("http://") or h.startswith("https://"):
+            return h
+        if h.startswith("/"):
+            return base_prefix + h
+        return base_prefix + "/" + h
+
+    concepts: list[dict] = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            logger.warning(
+                "BC concepts by category fetch HTTP %s category=%s snippet=%s",
+                resp.status_code,
+                category,
+                resp.text[:180],
+            )
+            return []
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.warning(
+                "BC concepts by category non-JSON response category=%s", category
+            )
+            return []
+
+        # Strategy:
+        # 1. If 'items' list present, treat as direct concept objects.
+        # 2. Else if HAL '_links' present, scan all list-valued link groups for concept links.
+        #    Recognize concept links by href containing '/mdr/bc/biomedicalconcepts/' or query '?concept=' style;
+        #    derive code from link.get('code') or last path segment.
+        # 3. Else if root is a single dict that looks like a concept, process it.
+        root_items: list[dict] = []
+        if isinstance(data, dict):
+            # Direct items array
+            if isinstance(data.get("items"), list):
+                root_items = [it for it in data["items"] if isinstance(it, dict)]
+            else:
+                # HAL links exploration
+                links = data.get("_links")
+                if isinstance(links, dict):
+                    # Collect potential lists under known or unknown keys
+                    for key, val in links.items():
+                        if key == "self":
+                            continue
+                        if isinstance(val, list):
+                            for link in val:
+                                if not isinstance(link, dict):
+                                    continue
+                                raw_href = link.get("href")
+                                if not isinstance(raw_href, str):
+                                    continue
+                                href_norm = _normalize_href(raw_href)
+                                # Identify concept link by path pattern
+                                if "/mdr/bc/biomedicalconcepts" in raw_href:
+                                    # Extract code (last path component before query) if not provided
+                                    code = (
+                                        link.get("code")
+                                        or link.get("name")
+                                        or link.get("identifier")
+                                    )
+                                    if not code:
+                                        # Parse from path
+                                        path_part = raw_href.split("?")[0].rstrip("/")
+                                        code = path_part.split("/")[-1]
+                                        # If code equals 'biomedicalconcepts' it is the list endpoint; skip
+                                        if code == "biomedicalconcepts":
+                                            code = None
+                                    title = link.get("title") or code or href_norm
+                                    if code and href_norm:
+                                        concepts.append(
+                                            {
+                                                "code": str(code),
+                                                "title": str(title),
+                                                "href": href_norm,
+                                            }
+                                        )
+                # Fallback single object
+                if not concepts:
+                    root_items = [data]
+        elif isinstance(data, list):
+            root_items = [it for it in data if isinstance(it, dict)]
+
+        # Process root_items (non-HAL direct objects) if any
+        for it in root_items:
+            code = (
+                it.get("code")
+                or it.get("conceptCode")
+                or it.get("identifier")
+                or it.get("id")
+            )
+            href = _normalize_href(it.get("href") or it.get("link"))
+            if not href and code:
+                href = f"{base_prefix}/mdr/bc/biomedicalconcepts/{code}"
+            title = it.get("title") or it.get("name") or it.get("label") or code
+            if code and href:
+                concepts.append({"code": str(code), "title": str(title), "href": href})
+
+        if not concepts:
+            logger.info("No biomedical concepts parsed for category '%s'", category)
+        concepts.sort(key=lambda c: c["title"].lower())
+        logger.info(
+            "Fetched %d biomedical concepts for category '%s'", len(concepts), category
+        )
+        return concepts
+    except Exception as e:  # pragma: no cover
+        logger.error("BC concepts by category fetch error for '%s': %s", category, e)
+        return []
 
 
 def fetch_biomedical_concepts(force: bool = False):
@@ -2824,6 +3036,62 @@ def ui_concepts_list(request: Request):
             "rows": rows,
             "count": len(rows),
             "missing_key": subscription_key is None,
+        },
+    )
+
+
+@app.get("/ui/concept_categories", response_class=HTMLResponse)
+def ui_categories_list(request: Request):
+    """Render table listing biomedical concept categories (name + title + href)."""
+    categories = fetch_biomedical_concept_categories() or []
+    rows = [
+        {
+            "name": c.get("name"),
+            "title": c.get("title") or c.get("name"),
+            "href": c.get("href"),
+        }
+        for c in categories
+    ]
+    subscription_key = os.environ.get("CDISC_SUBSCRIPTION_KEY") or _get_cdisc_api_key()
+    return templates.TemplateResponse(
+        request,
+        "concept_categories.html",
+        {
+            "rows": rows,
+            "count": len(rows),
+            "missing_key": subscription_key is None,
+        },
+    )
+
+
+@app.get("/ui/concept_categories/view", response_class=HTMLResponse)
+def ui_category_detail(request: Request, name: str = ""):
+    """Render list of biomedical concepts within a given category name.
+
+    Query params:
+      name: category name as returned by /ui/concept_categories.
+    """
+    category_name = name.strip()
+    if not category_name:
+        return HTMLResponse(
+            "<p><em>Category name required.</em></p><p><a href='/ui/concept_categories'>Back</a></p>"
+        )
+    concepts = fetch_biomedical_concepts_by_category(category_name) or []
+    rows = [
+        {
+            "code": c.get("code"),
+            "title": c.get("title"),
+            "href": c.get("href"),
+        }
+        for c in concepts
+    ]
+    return templates.TemplateResponse(
+        request,
+        "concept_category_detail.html",
+        {
+            "category": category_name,
+            "rows": rows,
+            "count": len(rows),
         },
     )
 
