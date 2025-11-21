@@ -37,7 +37,7 @@ def test_helper_category_url_encoding(monkeypatch, raw_category, expected_url_fr
     """Ensure category name is encoded only once and request performed."""
     captured_urls: List[str] = []
 
-    def fake_get(url, headers=None, timeout=0):  # noqa: D401
+    def fake_get(url, headers=None, timeout=0):
         captured_urls.append(url)
         return DummyResp(200, {"items": []})
 
