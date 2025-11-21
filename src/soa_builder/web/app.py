@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import re as _re
+import urllib.parse
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -1085,12 +1086,9 @@ def fetch_biomedical_concepts_by_category(name: str) -> list[dict]:
         return []
     category = name.strip()
     base_prefix = "https://api.library.cdisc.org/api/cosmos/v2"
-    # Endpoint pattern observed in category self links
-    # Encode only if raw value does not already contain percent escapes
-    if "%" in category:
-        encoded = category  # assume already percent-encoded
-    else:
-        encoded = requests.utils.quote(category, safe="")
+    # Deterministic single encoding: unquote once then re-encode
+    decoded_once = urllib.parse.unquote(category)
+    encoded = requests.utils.quote(decoded_once, safe="")
     url = f"{base_prefix}/mdr/bc/biomedicalconcepts?category={encoded}"
     headers = {"Accept": "application/json"}
     api_key = _get_cdisc_api_key()
